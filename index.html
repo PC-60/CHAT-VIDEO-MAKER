@@ -98,7 +98,15 @@ input[type=file]{display:none}
         <div style="width:90px"><label class="f">Chapter #</label><input type="number" id="chNum" min="1" value="1"></div>
         <div class="grow"><label class="f">Chapter title</label><input type="text" id="chTitle" value="Chapter 1"></div>
       </div>
-      <div class="row"><div class="grow"><label class="f">Story name (on the title card, same for every chapter)</label><input type="text" id="storyName" placeholder="e.g. Ten Years Old"></div></div>
+      <div class="row">
+        <div class="grow"><label class="f">Story name (title card)</label><input type="text" id="storyName" placeholder="e.g. Chosen One Support Chat (Kanto)"></div>
+        <div style="width:170px"><label class="f">Author</label><input type="text" id="author" placeholder="e.g. HeadcaseKiller"></div>
+      </div>
+      <div class="row"><div class="grow">
+        <label class="f">Intro chat (optional): plays after the title card, before the chapter. Use the same <code>Name: message</code> format.</label>
+        <textarea id="introMsg" rows="3" class="code" spellcheck="false" placeholder="TheChosenOne: today I woke up late…&#10;Several users are typing…"></textarea>
+      </div></div>
+      <div class="row"><label class="check"><input type="checkbox" id="introAll"> Play the intro chat on every chapter (otherwise chapter 1 only)</label></div>
       <div class="row" id="chapRow" style="display:none">
         <div class="grow"><label class="f">Chapters found in your story: pick one to convert</label><select id="chapSel"></select></div>
         <button class="btn" id="chapPrev" title="Previous chapter" style="align-self:flex-end">◀</button><button class="btn" id="chapNext" title="Next chapter" style="align-self:flex-end">▶</button>
@@ -176,7 +184,7 @@ input[type=file]{display:none}
         <label class="check"><input type="checkbox" id="optTyping" checked> Typing dots before messages</label>
         <label class="check"><input type="checkbox" id="optNames" checked> Show names</label>
         <label class="check"><input type="checkbox" id="optTime" checked> Timestamps</label>
-        <label class="check"><input type="checkbox" id="optIntro" checked> Title card (adds 3 s at the start)</label>
+        <label class="check"><input type="checkbox" id="optIntro" checked> Intro (title card + intro chat)</label>
       </div>
     </div>
   </div>
@@ -2390,7 +2398,7 @@ function layout(W,H){
     const cast=castFor(m.who);const right=isMe(m.who,m.chat);
     const prevB=i>0?MSGS[i-1]:null;const first=!(prevB&&prevB.kind==='b'&&prevB.who===m.who&&prevB.chat===m.chat);
     c.font=`400 ${fs}px ${FONT}`;const maxW=g.CW*(right?.68:.64)-px*2-(showTime?timeW*.15:0);const lines=wrap(c,m.text,maxW);const w=Math.max(...lines.map(l=>c.measureText(l).width))+px*2;
-    const nh=(!right&&first&&showNames)?nameH:0;
+    const nh=((!right||m.intro)&&first&&showNames)?nameH:0;
     return{m,lines,w,h:nh+lines.length*lh+py*2,nh,kind:'b',right,first,cast}});
   return{g,items,fs,lh,px,py,avR,gap:12*g.ui,gapTight:4*g.ui,typH:(lh+py*2),timeW}
 }
@@ -2424,8 +2432,8 @@ function drawFrame(ctx,t){
   if(!bgCache||bgCache.width!==W||bgCache.height!==H||bgCache._t!==CUR_THEME){bgCache=buildBg(W,H);bgCache._t=CUR_THEME}
   ctx.drawImage(bgCache,0,0);
   const tc=t-PRE;
-  const introA=PRE?1-ss(PRE-.7,PRE,t):0;
-  const chatA=PRE?ss(PRE-.7,PRE,t):1;
+  const introA=TITLE_DUR?1-ss(TITLE_DUR-.7,TITLE_DUR,t):0;
+  const chatA=TITLE_DUR?ss(TITLE_DUR-.7,TITLE_DUR,t):1;
   let dim=0,card=null,cardA=0;const n=lastIdx(tc);
   if(n>=0&&MSGS[n].kind==='p'){let s=n;while(s>0&&MSGS[s-1].kind==='p')s--;dim=ease((tc-MSGS[s].t)/.5);card=items[n];cardA=ease((tc-MSGS[n].t)/.4)}
   else if(n>0&&MSGS[n-1].kind==='p'){const k=1-ease((tc-MSGS[n].t)/.45);dim=k;card=items[n-1];cardA=k}
@@ -2443,14 +2451,22 @@ function drawProse(ctx,it,a,g,th){const{W,H,ui}=g;const fs=it.pfs,lh=fs*1.55,pad
   ctx.textAlign='left';ctx.textBaseline='alphabetic';ctx.fillStyle=th.title;ctx.font=`italic 400 ${fs}px ${SERIF}`;
   it.plines.forEach((l,k)=>ctx.fillText(l,x+pad,y+pad+top+lh*(k+.72)));ctx.restore()}
 function drawIntro(ctx,t,g,th,a){const{W,H,ui}=g;ctx.save();ctx.globalAlpha=a;
-  const k=ss(0,.9,t);const z=1+(1-k)*.04;ctx.translate(W/2,H/2);ctx.scale(z,z);ctx.translate(-W/2,-H/2);
-  const n=String($('chNum').value||'');const title=$('chTitle').value||'';const story=$('storyName').value||'';
+  const k=ss(0,1.2,t);const z=1+(1-k)*.035;ctx.translate(W/2,H/2);ctx.scale(z,z);ctx.translate(-W/2,-H/2);
+  const story=$('storyName').value.trim(),author=$('author').value.trim(),n=String($('chNum').value||''),ct=$('chTitle').value.trim();
+  let main=story||ct||'Chapter '+n,paren='';const pm=main.match(/^(.*?)\s*(\([^)]*\))\s*$/);if(pm&&pm[1]){main=pm[1];paren=pm[2].slice(1,-1)}
+  const chapTitle=story&&ct&&!/^chapter\s*\d+$/i.test(ct)?ct:'';
+  const sp=s=>s.split('').join(String.fromCharCode(8202));
   ctx.textAlign='center';ctx.textBaseline='middle';
-  if(story){ctx.fillStyle=th.sub;ctx.font=`500 ${18*ui}px ${FONT}`;ctx.fillText(story.toUpperCase().split('').join(String.fromCharCode(8202)),W/2,H/2-92*ui)}
-  ctx.fillStyle=th.accent;ctx.font=`700 ${16*ui}px ${FONT}`;ctx.fillText(`CHAPTER ${n}`.split('').join(String.fromCharCode(8202)),W/2,H/2-48*ui);
-  ctx.fillStyle=th.title;ctx.font=`700 ${Math.min(60*ui,(g.land?60:48)*ui)}px ${FONT}`;const tl=wrap(ctx,title,W*.8);tl.slice(0,2).forEach((l,i)=>ctx.fillText(l,W/2,H/2+(i-(tl.length>1?.5:0))*64*ui+10*ui));
-  const lw=ss(.3,1.3,t)*120*ui;ctx.fillStyle=th.accent;rrect(ctx,W/2-lw/2,H/2+(tl.length>1?84:58)*ui,lw,3*ui,2*ui);ctx.fill();
-  ctx.restore();ctx.textAlign='left'}
+  const tfs=(g.land?62:54)*ui;ctx.font=`800 ${tfs}px ${FONT}`;const tl=wrap(ctx,main,W*.82).slice(0,3);
+  const parts=[];if(story)parts.push({h:20*ui,draw:(y)=>{ctx.fillStyle=th.accent;ctx.font=`700 ${15*ui}px ${FONT}`;ctx.fillText(sp(`CHAPTER ${n}`),W/2,y)}},{h:26*ui});
+  tl.forEach(l=>parts.push({h:tfs*1.12,draw:(y)=>{ctx.fillStyle=th.title;ctx.font=`800 ${tfs}px ${FONT}`;ctx.fillText(l,W/2,y)}}));
+  if(paren)parts.push({h:8*ui},{h:34*ui,draw:(y)=>{ctx.fillStyle=th.accent;ctx.font=`italic 500 ${26*ui}px ${SERIF}`;ctx.fillText(paren,W/2,y)}});
+  if(author)parts.push({h:14*ui},{h:26*ui,draw:(y)=>{ctx.fillStyle=th.sub;ctx.font=`500 ${19*ui}px ${FONT}`;ctx.fillText('by '+author,W/2,y)}});
+  parts.push({h:26*ui},{h:4*ui,draw:(y,e)=>{const lw=e*130*ui;ctx.fillStyle=th.accent;rrect(ctx,W/2-lw/2,y-1.5*ui,lw,3*ui,2*ui);ctx.fill()}});
+  if(chapTitle)parts.push({h:26*ui},{h:32*ui,draw:(y)=>{ctx.fillStyle=th.title;ctx.font=`600 ${24*ui}px ${FONT}`;ctx.fillText(chapTitle,W/2,y)}});
+  const tot=parts.reduce((s,p)=>s+p.h,0);let y=H/2-tot/2,d=0;
+  parts.forEach(p=>{if(p.draw){const e=ss(d,d+.55,t);ctx.save();ctx.globalAlpha*=e;ctx.translate(0,(1-e)*14*ui);p.draw(y+p.h/2,e);ctx.restore();d+=.16}y+=p.h});
+  ctx.restore();ctx.textAlign='left';ctx.textBaseline='alphabetic'}
 function drawChat(ctx,tc,g,items,th){
   const{W,H,ui,CW,cx}=g;const{gap,gapTight,typH}=L;
   const panelX=cx-16*ui,panelW=CW+32*ui,pTop=g.top,pBot=g.bottom;
@@ -2458,7 +2474,7 @@ function drawChat(ctx,tc,g,items,th){
     ctx.strokeStyle=th.border;ctx.lineWidth=1*ui;rrect(ctx,panelX+.5,pTop+.5,panelW-1,pBot-pTop-1,26*ui);ctx.stroke()}
   const n=lastIdx(tc);
   const cur=n>=0?MSGS[n].chat:(MSGS[0]?MSGS[0].chat:'');
-  let secT=-1e9;for(let i=n;i>=0;i--){if(MSGS[i].kind==='c'){secT=MSGS[i].t;break}}
+  let secT=-1e9;for(let i=n;i>=0;i--){if(MSGS[i].kind==='c'){if(!(i>0&&MSGS[i-1].chat===MSGS[i].chat))secT=MSGS[i].t;break}}
   const fin=clamp((tc-secT)/.45);
   ctx.save();rrect(ctx,panelX,pTop,panelW,pBot-pTop,26*ui);ctx.clip();
   // header
@@ -2526,7 +2542,7 @@ function drawItem(ctx,it,y,e,eb,th,lastOfRun){const{g,fs,lh,px,py,avR}=L;const u
     it.lines.forEach((l,k)=>ctx.fillText(l,g.cx+g.CW/2,y+py+lh*.9*(k+.78)));ctx.restore();return}
   const c=it.cast;const bh=it.h-it.nh;const by=y+it.nh;
   const x=it.right?g.cx+g.CW-it.w:g.cx+avR*2+12*ui;
-  if(it.nh){ctx.fillStyle=c.color;ctx.font=`600 ${14.5*g.u}px ${FONT}`;ctx.fillText(it.m.who,x+6*ui,y+it.nh-7*ui)}
+  if(it.nh){ctx.fillStyle=c.color;ctx.font=`600 ${14.5*g.u}px ${FONT}`;if(it.right){ctx.textAlign='right';ctx.fillText(it.m.who,x+it.w-6*ui,y+it.nh-7*ui);ctx.textAlign='left'}else ctx.fillText(it.m.who,x+6*ui,y+it.nh-7*ui)}
   if(!it.right&&it.first)drawAvatar(ctx,g.cx+avR,by+avR,avR,c,th,false);
   const sc=.86+.14*eb;const ox=it.right?x+it.w:x,oy=by+bh;
   ctx.translate(ox,oy);ctx.scale(sc,sc);ctx.translate(-ox,-oy);ctx.translate((1-e)*(it.right?18:-18)*ui,0);
@@ -2570,7 +2586,20 @@ $('playBtn').addEventListener('click',()=>{if(T>=duration-.05)T=0;playing=!playi
 /* ================= wiring ================= */
 function updateWordCount(){const n=($('story').value.match(/\S+/g)||[]).length;$('wordCount').textContent=n?`${n.toLocaleString()} words`:''}
 let scriptTimer=null;
-function onScript(){MSGS=parseScript($('script').value);computeTimes(MSGS);renderCast();relayout();
+let TITLE_DUR=0;
+function introChatName(){const s=$('storyName').value.trim();return s.replace(/\s*\([^)]*\)\s*$/,'')||$('chTitle').value||'Chat'}
+function buildIntro(){
+  TITLE_DUR=$('optIntro').checked?3.6:0;if(!TITLE_DUR)return{msgs:[],dur:0};
+  const src=$('introMsg').value.trim();const ch=parseInt($('chNum').value)||1;
+  if(!src||(!$('introAll').checked&&ch!==1))return{msgs:[],dur:0};
+  const im=parseScript(convertChat(src,true)).filter(m=>m.kind!=='c');if(!im.length)return{msgs:[],dur:0};
+  const chat=introChatName();let tt=1.3;const wpm=Math.max(120,parseFloat($('wpm').value)||150)*1.3;
+  im.forEach(m=>{m.chat=chat;m.ln=-1;m.intro=true;m.t=tt;const w=(m.text.match(/\S+/g)||[]).length;tt+=m.kind==='t'?0:Math.max(2.2,w/wpm*60)+.5});
+  const last=im[im.length-1];const dur=tt+(last.kind==='t'?2.6:.8);
+  im.forEach(m=>{m.t-=dur});return{msgs:im,dur};
+}
+function onScript(){MSGS=parseScript($('script').value);computeTimes(MSGS);
+  const intro=buildIntro();MSGS=intro.msgs.concat(MSGS);PRE=TITLE_DUR+intro.dur;renderCast();relayout();
   const unsure=MSGS.filter(m=>m.unsure).length;$('unsure').style.display=unsure?'':'none';$('unsure').textContent=`${unsure} guessed`;
   $('msgCount').textContent=`${MSGS.length} lines · ${fmt(duration)}`;
   $('syncState').textContent=CUES?`synced to subtitles · ${alignInfo}`:(audioDur?`audio only: ${alignInfo}`:'not synced: using reading speed');
@@ -2606,8 +2635,10 @@ $('convertBtn').addEventListener('click',()=>{if(!chapterText()){toast('Paste a 
 let replaceArmed=0;function confirmReplace(){if(Date.now()-replaceArmed<4000)return true;replaceArmed=Date.now();toast('Click Convert again to replace the current script');return false}
 ['wpm','offset','endPad'].forEach(id=>$(id).addEventListener('input',onScript));
 ['tsize','optNames','optTime'].forEach(id=>$(id).addEventListener('change',()=>{relayout();saveLook()}));
-$('optIntro').addEventListener('change',()=>{PRE=$('optIntro').checked?3:0;relayout();saveLook()});
-$('storyName').addEventListener('input',()=>store.set('storyName',$('storyName').value));
+$('optIntro').addEventListener('change',()=>{onScript();saveLook()});
+let introTimer=null;function saveIntro(){store.set('storyName',$('storyName').value);store.set('author',$('author').value);store.set('introMsg',$('introMsg').value);store.set('introAll',$('introAll').checked)}
+['storyName','author','introMsg'].forEach(id=>$(id).addEventListener('input',()=>{clearTimeout(introTimer);introTimer=setTimeout(()=>{saveIntro();onScript()},300)}));
+$('introAll').addEventListener('change',()=>{saveIntro();onScript()});
 $('meSel').addEventListener('change',()=>{ME_MODE=$('meSel').value;store.set('meMode',ME_MODE);renderCast();relayout()});
 function buildSwatches(){const box=$('themes');box.innerHTML='';Object.entries(THEMES).forEach(([k,th])=>{const b=document.createElement('button');b.className='sw'+(k===CUR_THEME?' on':'');b.type='button';
   const c=document.createElement('canvas');c.width=192;c.height=108;const x=c.getContext('2d');const save=CUR_THEME;CUR_THEME=k;x.drawImage(buildBg(192,108),0,0);CUR_THEME=save;
@@ -2618,7 +2649,7 @@ function buildSwatches(){const box=$('themes');box.innerHTML='';Object.entries(T
   b.addEventListener('click',()=>{CUR_THEME=k;bgCache=null;[...box.children].forEach(x=>x.classList.remove('on'));b.classList.add('on');relayout();saveLook()});box.appendChild(b)})}
 ['optTyping','popVol','optNarr'].forEach(id=>$(id).addEventListener('change',saveLook));
 $('res').addEventListener('change',()=>{RES=$('res').value.split('x').map(Number);setPreviewSize();relayout();saveLook()});
-$('chTitle').addEventListener('input',saveDraft);$('chNum').addEventListener('input',()=>{const v=$('chNum').value;if(/^Chapter \d*$/.test($('chTitle').value))$('chTitle').value='Chapter '+v;saveDraft()});
+$('chTitle').addEventListener('input',saveDraft);$('chNum').addEventListener('input',()=>{const v=$('chNum').value;if(/^Chapter \d*$/.test($('chTitle').value))$('chTitle').value='Chapter '+v;saveDraft();onScript()});
 function saveLook(){store.set('look',{res:$('res').value,theme:CUR_THEME,time:$('optTime').checked,intro:$('optIntro').checked,tsize:$('tsize').value,popVol:$('popVol').value,typing:$('optTyping').checked,names:$('optNames').checked,narr:$('optNarr').checked,wpm:$('wpm').value})}
 $('nextUnsure').addEventListener('click',()=>{const ta=$('script');const lines=ta.value.split('\n');const curLn=ta.value.slice(0,ta.selectionEnd).split('\n').length;
   let found=-1;for(let k=0;k<lines.length;k++){const i=(curLn+k)%lines.length;if(/^\s*(?:\[[^\]]*\]\s*)?[^:>#]{1,40}\?:/.test(lines[i])){found=i;break}}
@@ -2710,7 +2741,9 @@ $('cancelBtn').addEventListener('click',()=>{cancelExport=true});
 /* ================= init ================= */
 const look=store.get('look',null);
 if(look){$('res').value=look.res||'1920x1080';CUR_THEME=THEMES[look.theme]?look.theme:'midnight';$('optTime').checked=look.time!==false;$('optIntro').checked=look.intro!==false;$('tsize').value=look.tsize||'1';$('popVol').value=look.popVol??'0.5';$('optTyping').checked=look.typing!==false;$('optNames').checked=look.names!==false;$('optNarr').checked=look.narr!==false;$('wpm').value=look.wpm||150}
-RES=$('res').value.split('x').map(Number);setPreviewSize();PRE=$('optIntro').checked?3:0;$('storyName').value=store.get('storyName','');buildSwatches();
+RES=$('res').value.split('x').map(Number);setPreviewSize();$('storyName').value=store.get('storyName','Chosen One Support Chat (Kanto)');$('author').value=store.get('author','HeadcaseKiller');
+$('introMsg').value=store.get('introMsg','TheChosenOne: today I woke up late, got a Pokémon that hated me, got a phone from mew, found out I’m the chosen one, whatever that means, got attacked by a whole flock of spearow, earned my starters respect, maybe, fell in a river with my injured starter, got fished out by an angry girl, stole a bike, rode to the nearest town, got stopped by police, escorted to a center, which was quickly attacked by team rocket, and played a part in blowing up that center, how was everybody else’s day?\nSeveral users are typing…');
+$('introAll').checked=!!store.get('introAll',false);buildSwatches();
 const DEMO=`The rain had been going for an hour when Mira finally knocked on the workshop door.
 
 “You’re late,” said Theo, not looking up from the clock he was fixing.
