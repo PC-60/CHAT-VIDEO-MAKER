@@ -131,7 +131,12 @@ input[type=file]{display:none}
         <div class="drop" id="srtDrop"><b>Subtitles (.srt / .vtt)</b><span id="srtLabel">Drop or click: messages pop up exactly when your voice reads them</span></div>
         <div class="drop" id="audDrop"><b>Narration audio</b><span id="audLabel">Drop or click: mp3, wav, m4a. Baked into the video</span></div>
       </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn p" id="autoSyncBtn" style="display:none">✨ Auto-sync without subtitles</button>
+        <button class="btn" id="saveSrtBtn" style="display:none">⬇ Save the timing as .srt</button>
+      </div>
       <p class="hint" id="fullInfo" style="display:none;color:var(--fg)"></p>
+      <p class="hint"><b>No subtitles?</b> Load just the audio and click <b>Auto-sync</b>. The tool times every line from the story text and the pauses in your voice. That takes about a minute for 3 hours of audio, versus a long wait for subtitles. Use it when your TTS read the exact story text you pasted.</p>
       <p class="hint">Got <b>one narration for the whole story</b>? Load the full subtitles and full audio here once. The tool finds every chapter inside them, so each chapter's video gets just its own part. MP3 or WAV works best for long audio.</p>
       <input type="file" id="srtFile" accept=".srt,.vtt,text/plain">
       <input type="file" id="audFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,video/mp4">
@@ -2608,8 +2613,13 @@ function onScript(){setChapterWindow();MSGS=parseScript($('script').value);compu
   $('msgCount').textContent=`${MSGS.length} lines · ${fmt(duration)}`;
   $('syncState').textContent=FULL?`whole-story narration · ${alignInfo}`:CUES?`synced to subtitles · ${alignInfo}`:(SRC?`audio only: ${alignInfo}`:'not synced: using reading speed');
   const fi=$('fullInfo');if(FULL){const i=(parseInt($('chapSel').value)||0)+1;const miss=FULL.n-FULL.found;
-    fi.style.display='';fi.innerHTML=`<b>One narration for the whole story:</b> found ${FULL.found} of ${FULL.n} chapters in it${miss?` (${miss} estimated)`:''}. Chapter ${i} plays <b>${fmt(CH_OFF)} – ${fmt(CH_OFF+CH_LEN)}</b> of your audio (${fmt(CH_LEN)}).`}else fi.style.display='none';
+    fi.style.display='';fi.style.color='var(--fg)';fi.innerHTML=`<b>One narration for the whole story:</b> found ${FULL.found} of ${FULL.n} chapters in it${miss?` (${miss} estimated)`:''}. Chapter ${i} plays <b>${fmt(CH_OFF)} – ${fmt(CH_OFF+CH_LEN)}</b> of your audio (${fmt(CH_LEN)}).`}
+  else if(syncBusy){}
+  else if(SRC&&!CUES&&SRC.duration>1200){fi.style.display='';fi.style.color='var(--warn)';fi.innerHTML=`<b>⚠ Not synced yet.</b> Your audio is ${fmt(SRC.duration)} long. Click <b>✨ Auto-sync without subtitles</b> (about a minute), or load its matching .srt file.`}
+  else if(SRC&&CUES&&CHAPTERS.length>1&&!FULL&&SRC.duration>1200){fi.style.display='';fi.style.color='var(--warn)';fi.innerHTML=`<b>⚠ Couldn't find the chapters in these subtitles.</b> Check that the .srt belongs to this audio and this story.`}
+  else fi.style.display='none';
   $('exportAllBtn').style.display=CHAPTERS.length>1?'':'none';
+  $('autoSyncBtn').style.display=SRC&&(!CUES||AUTO_SRT)&&$('story').value.trim()?'':'none';$('autoSyncBtn').textContent=AUTO_SRT?'↻ Re-run auto-sync':'✨ Auto-sync without subtitles';
   saveDraft()}
 function saveDraft(){const ok=store.set('draft',{story:$('story').value,script:$('script').value,title:$('chTitle').value,num:$('chNum').value});$('saveState').textContent=ok?'Saved in this browser':'Too big to auto-save'}
 $('script').addEventListener('input',()=>{clearTimeout(scriptTimer);scriptTimer=setTimeout(onScript,350)});
@@ -2623,7 +2633,7 @@ function refreshChapters(){const s=$('story').value;CHAPTERS=splitChapters(s);ST
   sel.innerHTML=CHAPTERS.map((c,i)=>{const w=(c.match(/\S+/g)||[]).length;const first=(c.split('\n').map(x=>x.trim()).find(x=>x&&!/^\[/.test(x))||'').slice(0,46);return`<option value="${i}">Chapter ${i+1} · ${w.toLocaleString()} words · ${esc(first)}…</option>`}).join('');
   sel.value=String(cur-1);$('wordCount').textContent=`${CHAPTERS.length} chapters · ${(s.match(/\S+/g)||[]).length.toLocaleString()} words`}
 function chapterText(){return CHAPTERS.length>1?CHAPTERS[parseInt($('chapSel').value)||0]:$('story').value.trim()}
-function clearNarration(){CUES=null;audioBuf=null;audioDur=0;SRC=null;FULL=null;aud.pause();if(audioURL){URL.revokeObjectURL(audioURL);audioURL=null;aud.removeAttribute('src');aud.load()}
+function clearNarration(){CUES=null;AUTO_SRT=false;$('saveSrtBtn').style.display='none';audioBuf=null;audioDur=0;SRC=null;FULL=null;aud.pause();if(audioURL){URL.revokeObjectURL(audioURL);audioURL=null;aud.removeAttribute('src');aud.load()}
   $('srtDrop').classList.remove('done');$('audDrop').classList.remove('done');$('srtLabel').textContent='Drop or click: messages pop up exactly when your voice reads them';$('audLabel').textContent='Drop or click: mp3, wav, m4a. Baked into the video'}
 function pickChapter(i){i=clamp(i,0,CHAPTERS.length-1);$('chapSel').value=String(i);$('chNum').value=i+1;if(/^Chapter \d*$/.test($('chTitle').value)||!$('chTitle').value)$('chTitle').value='Chapter '+(i+1);
   if(FULL){doConvert();return}
@@ -2672,11 +2682,11 @@ function bindDrop(drop,input,handler){drop.addEventListener('click',()=>input.cl
   drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
   drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');const f=e.dataTransfer.files[0];if(f)handler(f)})}
 bindDrop($('srtDrop'),$('srtFile'),async f=>{const txt=await f.text();const c=parseSRT(txt);if(!c.length){toast('Couldn\'t read any subtitle lines from that file');return}
-  CUES=c;$('srtDrop').classList.add('done');$('srtLabel').textContent=`${f.name}: ${c.length} lines, ${fmt(c[c.length-1].b)}`;detectFull();onScript();
+  CUES=c;AUTO_SRT=false;$('saveSrtBtn').style.display='none';$('srtDrop').classList.add('done');$('srtLabel').textContent=`${f.name}: ${c.length} lines, ${fmt(c[c.length-1].b)}`;detectFull();onScript();
   if(FULL)toast(`Whole-story narration: found ${FULL.found} of ${FULL.n} chapters. Pick any chapter and it plays its own part.`,6000)});
 bindDrop($('audDrop'),$('audFile'),async f=>{
   $('audLabel').textContent='Reading audio…';
-  try{SRC=await makeSource(f)}catch(e){SRC=null;$('audLabel').textContent='Couldn\'t read that audio';toast(e&&e.message?e.message:'Couldn\'t read that audio file. Try MP3 or WAV.',6000);return}
+  try{SRC=await makeSource(f);SRC.key=f.name+':'+f.size}catch(e){SRC=null;$('audLabel').textContent='Couldn\'t read that audio';toast(e&&e.message?e.message:'Couldn\'t read that audio file. Try MP3 or WAV.',6000);return}
   if(audioURL)URL.revokeObjectURL(audioURL);audioURL=URL.createObjectURL(f);aud.src=audioURL;audioDur=SRC.duration;
   $('audDrop').classList.add('done');$('audLabel').textContent=`${f.name}: ${fmt(audioDur)}${audioDur>1800?' · whole story':''}`;detectFull();onScript()});
 
@@ -2761,6 +2771,59 @@ function detectFull(){
 function setChapterWindow(){const i=CHAPTERS.length>1?(parseInt($('chapSel').value)||0):0;
   if(FULL){CH_OFF=FULL.starts[i];CH_LEN=FULL.ends[i]-CH_OFF}else{CH_OFF=0;CH_LEN=SRC?SRC.duration:0}}
 
+/* ================= auto-sync without subtitles: story text + pauses in the audio ================= */
+let syncBusy=false,cancelSync=false;
+function storyUnits(text){const out=[];text.replace(/\r/g,'').replace(/\bChapter Text\b/g,'').split('\n').forEach(l=>{l=l.trim();if(!l)return;
+  if(l.length>140){let cur='';(l.match(/[^.!?…]+[.!?…]+[”"’)]*\s*|[^.!?…]+$/g)||[l]).forEach(p=>{if(cur.length+p.length>140&&cur){out.push(cur.trim());cur=p}else cur+=p});if(cur.trim())out.push(cur.trim())}else out.push(l)});return out}
+const unitWeight=u=>{const s=u.replace(/[\[\]]/g,'');let w=s.length;(s.match(/\d+/g)||[]).forEach(m=>w+=m.length*3);return Math.max(4,w)};
+async function detectPauses(onProg){
+  const key=SRC.key?'pauses:'+SRC.key:null;if(key){const c=store.get(key,null);if(c&&c.length)return c}
+  const D=SRC.duration,CH=60,thr=Math.pow(10,-35/20),frame=.01,res=[];let sil=null;
+  for(let t=0;t<D;t+=CH){if(cancelSync)throw new Error('cancelled');
+    const seg=await SRC.getSegment(t,Math.min(D,t+CH));const sr=seg.sampleRate,fl=Math.max(1,Math.round(sr*frame));
+    const c0=seg.getChannelData(0),c1=seg.numberOfChannels>1?seg.getChannelData(1):null,nF=Math.floor(seg.length/fl);
+    for(let f=0;f<nF;f++){let s=0;const o=f*fl,e=o+fl;if(c1){for(let k=o;k<e;k++){const v=(c0[k]+c1[k])*.5;s+=v*v}}else{for(let k=o;k<e;k++){const v=c0[k];s+=v*v}}
+      const tt=t+f*frame;if(Math.sqrt(s/fl)<thr){if(sil==null)sil=tt}else if(sil!=null){if(tt-sil>=.25)res.push([+sil.toFixed(3),+tt.toFixed(3)]);sil=null}}
+    onProg(Math.min(1,(t+CH)/D));await new Promise(r=>setTimeout(r,0))}
+  if(sil!=null&&D-sil>=.25)res.push([sil,D]);
+  if(key)store.set(key,res);return res}
+function alignUnits(units,pauses,D){
+  const n=units.length,W=units.map(unitWeight);
+  let A=0,B=D;if(pauses.length&&pauses[0][0]<.05)A=pauses[0][1];if(pauses.length&&pauses[pauses.length-1][1]>=D-.05)B=pauses[pauses.length-1][0];
+  const P=pauses.filter(p=>p[1]>A+.2&&p[1]<B-.2),E=P.map(p=>p[1]),Ln=P.map(p=>p[1]-p[0]);
+  const sl=[...Ln].sort((a,b)=>b-a),thr=clamp(sl[Math.min(sl.length-1,Math.max(0,n-1))]||.45,.25,.9);
+  const longs=Ln.filter(x=>x>=thr).sort((a,b)=>a-b),g=longs.length?longs[Math.floor(longs.length/2)]:.5;
+  const C=W.reduce((a,b)=>a+b,0),r=Math.max(.01,(B-A-n*g)/C);
+  const cum=[0];for(let i=0;i<n;i++)cum.push(cum[i]+W[i]*r+g);const sc=(B-A)/cum[n],pred=cum.map(c=>A+c*sc);
+  const WIN=90,lb=x=>{let lo=0,hi=E.length;while(lo<hi){const m=(lo+hi)>>1;if(E[m]<x)lo=m+1;else hi=m}return lo};
+  let pT=new Float64Array([A]),pC=new Float64Array([0]);const backs=[],candT=[pT];
+  for(let i=1;i<=n;i++){let ct,cp;
+    if(i===n){ct=[B];cp=[0]}else{const lo=lb(pred[i]-WIN),hi=lb(pred[i]+WIN);ct=[];cp=[];for(let k=lo;k<hi;k++){ct.push(E[k]);cp.push(Ln[k]>=thr?0:8)}if(!ct.length){ct=[pred[i]];cp=[9]}}
+    const exp=W[i-1]*r+g,sig=.18*exp+.3,cT=new Float64Array(ct),cC=new Float64Array(ct.length),bk=new Int32Array(ct.length);
+    for(let a=0;a<ct.length;a++){let best=1e300,bj=0;const t=ct[a];for(let j=0;j<pT.length;j++){const d=t-pT[j];if(d<=.2)continue;const z=(d-exp)/sig,c=pC[j]+z*z;if(c<best){best=c;bj=j}}
+      if(best===1e300){best=pC[0]+1e6;bj=0}cC[a]=best+cp[a];bk[a]=bj}
+    backs.push(bk);candT.push(cT);pT=cT;pC=cC}
+  const times=new Array(n+1);let idx=0;times[n]=B;for(let i=n;i>=1;i--){idx=backs[i-1][idx];times[i-1]=candT[i-1][idx]}
+  return times}
+async function autoSync(){
+  if(syncBusy)return;if(!SRC){toast('Load your narration audio first');return}
+  const text=$('story').value.trim();if(!text){toast('Paste the story text first');return}
+  syncBusy=true;cancelSync=false;const btn=$('autoSyncBtn');btn.disabled=true;const fi=$('fullInfo');fi.style.display='';fi.style.color='var(--fg)';
+  try{
+    fi.innerHTML='<b>Listening for pauses in your audio…</b> 0%';
+    const pauses=await detectPauses(p=>{fi.innerHTML=`<b>Listening for pauses in your audio…</b> ${Math.round(p*100)}%`});
+    fi.innerHTML='<b>Matching every line of the story to the audio…</b>';await new Promise(r=>setTimeout(r,30));
+    const units=storyUnits(text);const times=alignUnits(units,pauses,SRC.duration);
+    CUES=units.map((u,i)=>({a:times[i],b:Math.max(times[i]+.2,times[i+1]-.3),t:u}));AUTO_SRT=true;
+    $('srtDrop').classList.add('done');$('srtLabel').textContent=`Auto-timed from your story: ${units.length.toLocaleString()} lines`;
+    $('saveSrtBtn').style.display='';detectFull();onScript();
+    toast(FULL?`Synced without subtitles: found ${FULL.found} of ${FULL.n} chapters.`:'Synced to your audio without subtitles.',6000);
+  }catch(e){if(String(e&&e.message)!=='cancelled'){console.error(e);toast('Auto-sync failed: '+(e&&e.message?e.message:e),6000)}fi.style.display='none'}
+  finally{syncBusy=false;btn.disabled=false;onScript()}}
+let AUTO_SRT=false;
+function cuesToSrt(){const f=s=>{const ms=Math.max(0,Math.round(s*1000));return`${String(Math.floor(ms/3600000)).padStart(2,'0')}:${String(Math.floor(ms/60000)%60).padStart(2,'0')}:${String(Math.floor(ms/1000)%60).padStart(2,'0')},${String(ms%1000).padStart(3,'0')}`};
+  return CUES.map((c,i)=>`${i+1}\n${f(c.a)} --> ${f(c.b)}\n${c.t}\n`).join('\n')}
+
 /* ================= export (WebCodecs → MP4) ================= */
 let cancelExport=false;
 let downloads=null;try{if(window.claude&&typeof window.claude.use==='function')window.claude.use('downloads').then(d=>{downloads=d}).catch(()=>{})}catch(_){}
@@ -2833,6 +2896,8 @@ async function exportCurrent(batch){
     $('exportBtn').disabled=false;$('cancelBtn').style.display=exportingAll?'':'none';relayout()}
   return result}
 $('cancelBtn').addEventListener('click',()=>{cancelExport=true});
+$('autoSyncBtn').addEventListener('click',()=>{if(AUTO_SRT){CUES=null;AUTO_SRT=false;FULL=null}autoSync()});
+$('saveSrtBtn').addEventListener('click',async()=>{if(!CUES)return;const off=!downloads;const r=await saveFile(new Blob([cuesToSrt()],{type:'text/plain'}),off?'narration-auto.srt':'narration-auto.srt.txt');if(r==='saved')toast(off?'Saved narration-auto.srt':'Saved. Rename it to .srt if your editor needs that.',5000)});
 
 /* ================= init ================= */
 const look=store.get('look',null);
@@ -2861,7 +2926,7 @@ else{$('story').value=DEMO;$('script').value=convert(DEMO,true);$('chTitle').val
 updateWordCount();refreshChapters();onScript();
 if(document.fonts&&document.fonts.ready)document.fonts.ready.then(relayout);
 requestAnimationFrame(tick);
-window.__test={full:()=>({FULL,CH_OFF,CH_LEN}),ws:()=>wordStream(),cm:i=>chapterMsgs(i).slice(0,8).map(m=>[m.kind,m.who||'',m.text]),convert,parseSRT,state:()=>({MSGS,duration,alignInfo,L}),setCues:c=>{CUES=c;onScript()},drawAt:t=>{T=t;performanceT=t;pctx.setTransform(pv.width/RES[0],0,0,pv.height/RES[1],0,0);drawFrame(pctx,t)}};
+window.__test={cues:()=>CUES,full:()=>({FULL,CH_OFF,CH_LEN}),ws:()=>wordStream(),cm:i=>chapterMsgs(i).slice(0,8).map(m=>[m.kind,m.who||'',m.text]),convert,parseSRT,state:()=>({MSGS,duration,alignInfo,L}),setCues:c=>{CUES=c;onScript()},drawAt:t=>{T=t;performanceT=t;pctx.setTransform(pv.width/RES[0],0,0,pv.height/RES[1],0,0);drawFrame(pctx,t)}};
 })();
 </script>
 </body>
