@@ -131,6 +131,8 @@ input[type=file]{display:none}
         <div class="drop" id="srtDrop"><b>Subtitles (.srt / .vtt)</b><span id="srtLabel">Drop or click: messages pop up exactly when your voice reads them</span></div>
         <div class="drop" id="audDrop"><b>Narration audio</b><span id="audLabel">Drop or click: mp3, wav, m4a. Baked into the video</span></div>
       </div>
+      <p class="hint" id="fullInfo" style="display:none;color:var(--fg)"></p>
+      <p class="hint">Got <b>one narration for the whole story</b>? Load the full subtitles and full audio here once. The tool finds every chapter inside them, so each chapter's video gets just its own part. MP3 or WAV works best for long audio.</p>
       <input type="file" id="srtFile" accept=".srt,.vtt,text/plain">
       <input type="file" id="audFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,video/mp4">
       <div class="row">
@@ -203,6 +205,7 @@ input[type=file]{display:none}
     <div class="body">
       <div class="row">
         <button class="btn p" id="exportBtn">⬇ Export MP4</button>
+        <button class="btn" id="exportAllBtn" style="display:none">⬇ Export all chapters</button>
         <button class="btn" id="cancelBtn" style="display:none">Cancel</button>
         <span class="muted" style="font-size:12px" id="expMsg">Renders faster than real time in Chrome or Edge.</span>
       </div>
@@ -2275,7 +2278,7 @@ function computeTimes(msgs){
   const wcs=msgs.map(m=>Math.max(1,norm(m.text).length));
   let times=new Array(msgs.length).fill(null);
   if(CUES&&CUES.length){
-    const W=[];CUES.forEach(c=>{const ws=norm(c.t);const L=ws.reduce((s,w)=>s+w.length+1,0)||1;let acc=0;ws.forEach(w=>{W.push({w,t:c.a+(c.b-c.a)*acc/L});acc+=w.length+1})});
+    const WA=wordStream();const w0=FULL?CH_OFF:-1e9,w1=FULL?CH_OFF+CH_LEN:1e9;const W=FULL?WA.filter(x=>x.t>=w0-.5&&x.t<w1):WA;
     let p=0,hit=0;
     msgs.forEach((m,i)=>{const toks=norm(m.text);if(!toks.length)return;const k=Math.min(5,toks.length);let best=-1,bs=0;
       const lim=Math.min(W.length,p+600);
@@ -2283,10 +2286,11 @@ function computeTimes(msgs){
       if(best>=0){times[i]=W[best].t;p=best+Math.max(1,Math.floor(toks.length*.7));hit++}});
     alignInfo=`${Math.round(hit/Math.max(1,msgs.length)*100)}% of lines matched`;
     // fill gaps by word-count interpolation
-    let li=-1;for(let i=0;i<=msgs.length;i++){if(i===msgs.length||times[i]!=null){const t0=li>=0?times[li]:(CUES[0].a),t1=i<msgs.length?times[i]:CUES[CUES.length-1].b;const span=[];for(let k=li+1;k<i;k++)span.push(k);
+    let li=-1;for(let i=0;i<=msgs.length;i++){if(i===msgs.length||times[i]!=null){const t0=li>=0?times[li]:(FULL?CH_OFF+.3:CUES[0].a),t1=i<msgs.length?times[i]:(FULL?CH_OFF+CH_LEN-.5:CUES[CUES.length-1].b);const span=[];for(let k=li+1;k<i;k++)span.push(k);
       if(span.length){const tot=span.reduce((s,k)=>s+wcs[k],0)+1;let acc=0;span.forEach(k=>{acc+=wcs[k];times[k]=t0+(t1-t0)*acc/tot})}li=i}}
-  }else if(audioDur>0){
-    const tot=wcs.reduce((a,b)=>a+b,0);let acc=0;msgs.forEach((m,i)=>{times[i]=.4+(audioDur-1)*acc/tot;acc+=wcs[i]});alignInfo='spread across audio length';
+    if(FULL)for(let i=0;i<times.length;i++)if(times[i]!=null)times[i]-=CH_OFF;
+  }else if(CH_LEN>0){
+    const tot=wcs.reduce((a,b)=>a+b,0);let acc=0;msgs.forEach((m,i)=>{times[i]=.4+(CH_LEN-1)*acc/tot;acc+=wcs[i]});alignInfo='spread across audio length';
   }else{
     const wpm=Math.max(60,parseFloat($('wpm').value)||150);let t=.6;msgs.forEach((m,i)=>{times[i]=t;t+=m.kind==='c'?1.2:m.kind==='t'?2.5:m.kind==='p'?Math.max(2.8,wcs[i]/wpm*60)+.6:m.kind==='s'?Math.max(.9,wcs[i]/wpm*60*.7):Math.max(1.1,wcs[i]/wpm*60)+.25});alignInfo='';
   }
@@ -2404,7 +2408,7 @@ function layout(W,H){
 }
 function relayout(){bgCache=null;L=layout(RES[0],RES[1]);duration=calcDuration();updTime()}
 let duration=10;
-function calcDuration(){const lastT=MSGS.length?MSGS[MSGS.length-1].t:0;return PRE+Math.max(audioDur||0,lastT+(parseFloat($('endPad').value)||0))+.01}
+function calcDuration(){const lastT=MSGS.length?MSGS[MSGS.length-1].t:0;return PRE+Math.max((SRC||FULL)?CH_LEN:0,lastT+(parseFloat($('endPad').value)||0))+.01}
 function rrect(ctx,x,y,w,h,r){ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,y,w,h,r);else ctx.rect(x,y,w,h)}
 function lastIdx(t){let lo=0,hi=MSGS.length-1,a=-1;while(lo<=hi){const m=(lo+hi)>>1;if(MSGS[m].t<=t){a=m;lo=m+1}else hi=m-1}return a}
 function titleFor(i){let t=$('chTitle').value||'Chat';for(const x of titleAt){if(x.idx<=i+1)t=x.title}return t}
@@ -2570,7 +2574,7 @@ function setPreviewSize(){const[W,H]=RES;const max=1280;const s=Math.min(1,max/M
 function pop(){const v=parseFloat($('popVol').value)||0;if(!v)return;try{actx=actx||new(window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain(),n=actx.currentTime;o.type='sine';o.frequency.setValueAtTime(880,n);o.frequency.exponentialRampToValueAtTime(1320,n+.05);g.gain.setValueAtTime(0,n);g.gain.linearRampToValueAtTime(.18*v,n+.008);g.gain.exponentialRampToValueAtTime(.0001,n+.14);o.connect(g);g.connect(actx.destination);o.start(n);o.stop(n+.16)}catch(_){}}
 function tick(now){const dt=Math.min(.1,(now-lastNow)/1000);lastNow=now;
   if(playing){const t0=T;
-    if(audioURL){if(T<PRE){T+=dt;if(T>=PRE){aud.currentTime=0;aud.play().catch(()=>{})}}else if(!aud.paused)T=PRE+aud.currentTime;else T+=dt}else T+=dt;
+    if(audioURL){if(T<PRE){T+=dt;if(T>=PRE){aud.currentTime=CH_OFF;aud.play().catch(()=>{})}}else if(!aud.paused)T=PRE+aud.currentTime-CH_OFF;else T+=dt}else T+=dt;
     if(T>=duration){T=duration;playing=false;aud.pause();$('playBtn').textContent='▶ Play'}
     const a=lastIdx(t0-PRE),b=lastIdx(T-PRE);if(b>a&&b-a<4)for(let k=a+1;k<=b;k++)if(MSGS[k].kind==='b')pop()}
   performanceT=T;
@@ -2578,10 +2582,10 @@ function tick(now){const dt=Math.min(.1,(now-lastNow)/1000);lastNow=now;
   updTime();requestAnimationFrame(tick)}
 function updTime(){$('time').textContent=`${fmt(T)} / ${fmt(duration)}`;if(!seeking)$('seek').value=Math.round(T/duration*1000)}
 let seeking=false;
-$('seek').addEventListener('input',()=>{seeking=true;T=$('seek').value/1000*duration;if(audioURL){aud.currentTime=clamp(T-PRE,0,audioDur||1e9);if(T<PRE)aud.pause();else if(playing)aud.play().catch(()=>{})}});
+$('seek').addEventListener('input',()=>{seeking=true;T=$('seek').value/1000*duration;if(audioURL){aud.currentTime=CH_OFF+clamp(T-PRE,0,CH_LEN||1e9);if(T<PRE)aud.pause();else if(playing)aud.play().catch(()=>{})}});
 $('seek').addEventListener('change',()=>{seeking=false});
 $('playBtn').addEventListener('click',()=>{if(T>=duration-.05)T=0;playing=!playing;$('playBtn').textContent=playing?'❚❚ Pause':'▶ Play';
-  if(audioURL){if(playing&&T>=PRE){aud.currentTime=clamp(T-PRE,0,audioDur);aud.play().catch(()=>{})}else aud.pause()}});
+  if(audioURL){if(playing&&T>=PRE){aud.currentTime=CH_OFF+clamp(T-PRE,0,CH_LEN);aud.play().catch(()=>{})}else aud.pause()}});
 
 /* ================= wiring ================= */
 function updateWordCount(){const n=($('story').value.match(/\S+/g)||[]).length;$('wordCount').textContent=n?`${n.toLocaleString()} words`:''}
@@ -2598,11 +2602,14 @@ function buildIntro(){
   const last=im[im.length-1];const dur=tt+(last.kind==='t'?2.6:.8);
   im.forEach(m=>{m.t-=dur});return{msgs:im,dur};
 }
-function onScript(){MSGS=parseScript($('script').value);computeTimes(MSGS);
+function onScript(){setChapterWindow();MSGS=parseScript($('script').value);computeTimes(MSGS);
   const intro=buildIntro();MSGS=intro.msgs.concat(MSGS);PRE=TITLE_DUR+intro.dur;renderCast();relayout();
   const unsure=MSGS.filter(m=>m.unsure).length;$('unsure').style.display=unsure?'':'none';$('unsure').textContent=`${unsure} guessed`;
   $('msgCount').textContent=`${MSGS.length} lines · ${fmt(duration)}`;
-  $('syncState').textContent=CUES?`synced to subtitles · ${alignInfo}`:(audioDur?`audio only: ${alignInfo}`:'not synced: using reading speed');
+  $('syncState').textContent=FULL?`whole-story narration · ${alignInfo}`:CUES?`synced to subtitles · ${alignInfo}`:(SRC?`audio only: ${alignInfo}`:'not synced: using reading speed');
+  const fi=$('fullInfo');if(FULL){const i=(parseInt($('chapSel').value)||0)+1;const miss=FULL.n-FULL.found;
+    fi.style.display='';fi.innerHTML=`<b>One narration for the whole story:</b> found ${FULL.found} of ${FULL.n} chapters in it${miss?` (${miss} estimated)`:''}. Chapter ${i} plays <b>${fmt(CH_OFF)} – ${fmt(CH_OFF+CH_LEN)}</b> of your audio (${fmt(CH_LEN)}).`}else fi.style.display='none';
+  $('exportAllBtn').style.display=CHAPTERS.length>1?'':'none';
   saveDraft()}
 function saveDraft(){const ok=store.set('draft',{story:$('story').value,script:$('script').value,title:$('chTitle').value,num:$('chNum').value});$('saveState').textContent=ok?'Saved in this browser':'Too big to auto-save'}
 $('script').addEventListener('input',()=>{clearTimeout(scriptTimer);scriptTimer=setTimeout(onScript,350)});
@@ -2610,15 +2617,16 @@ let chapTimer=null;$('story').addEventListener('input',()=>{updateWordCount();cl
 let CHAPTERS=[],ALLCOUNTS=null,STORY_IS_CHAT=false;
 function splitChapters(text){const t=text.replace(/\r/g,'');let parts=t.split(/\bChapter Text\b/);if(parts.length<2)parts=t.split(/^\s*Chapter\s+\d+\s*(?::[^\n]*)?\s*$/m);
   return parts.map(s=>s.trim()).filter(s=>s.replace(/\s+/g,'').length>30)}
-function refreshChapters(){const s=$('story').value;CHAPTERS=splitChapters(s);STORY_IS_CHAT=looksLikeChat(s);ALLCOUNTS=STORY_IS_CHAT?senderCounts(s):null;
+function refreshChapters(){const s=$('story').value;CHAPTERS=splitChapters(s);STORY_IS_CHAT=looksLikeChat(s);ALLCOUNTS=STORY_IS_CHAT?senderCounts(s):null;if(CUES)setTimeout(()=>{detectFull();onScript()},0);
   const sel=$('chapSel'),row=$('chapRow');if(CHAPTERS.length<2){row.style.display='none';updateWordCount();return}
   row.style.display='';const cur=clamp(parseInt($('chNum').value)||1,1,CHAPTERS.length);
   sel.innerHTML=CHAPTERS.map((c,i)=>{const w=(c.match(/\S+/g)||[]).length;const first=(c.split('\n').map(x=>x.trim()).find(x=>x&&!/^\[/.test(x))||'').slice(0,46);return`<option value="${i}">Chapter ${i+1} · ${w.toLocaleString()} words · ${esc(first)}…</option>`}).join('');
   sel.value=String(cur-1);$('wordCount').textContent=`${CHAPTERS.length} chapters · ${(s.match(/\S+/g)||[]).length.toLocaleString()} words`}
 function chapterText(){return CHAPTERS.length>1?CHAPTERS[parseInt($('chapSel').value)||0]:$('story').value.trim()}
-function clearNarration(){CUES=null;audioBuf=null;audioDur=0;aud.pause();if(audioURL){URL.revokeObjectURL(audioURL);audioURL=null;aud.removeAttribute('src');aud.load()}
+function clearNarration(){CUES=null;audioBuf=null;audioDur=0;SRC=null;FULL=null;aud.pause();if(audioURL){URL.revokeObjectURL(audioURL);audioURL=null;aud.removeAttribute('src');aud.load()}
   $('srtDrop').classList.remove('done');$('audDrop').classList.remove('done');$('srtLabel').textContent='Drop or click: messages pop up exactly when your voice reads them';$('audLabel').textContent='Drop or click: mp3, wav, m4a. Baked into the video'}
 function pickChapter(i){i=clamp(i,0,CHAPTERS.length-1);$('chapSel').value=String(i);$('chNum').value=i+1;if(/^Chapter \d*$/.test($('chTitle').value)||!$('chTitle').value)$('chTitle').value='Chapter '+(i+1);
+  if(FULL){doConvert();return}
   const had=!!(CUES||audioURL);clearNarration();doConvert();if(had)toast(`Chapter ${i+1} loaded. Add this chapter's subtitles and audio.`,4500)}
 $('chapSel').addEventListener('change',()=>pickChapter(parseInt($('chapSel').value)));
 $('chapPrev').addEventListener('click',()=>pickChapter((parseInt($('chapSel').value)||0)-1));
@@ -2664,13 +2672,94 @@ function bindDrop(drop,input,handler){drop.addEventListener('click',()=>input.cl
   drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
   drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');const f=e.dataTransfer.files[0];if(f)handler(f)})}
 bindDrop($('srtDrop'),$('srtFile'),async f=>{const txt=await f.text();const c=parseSRT(txt);if(!c.length){toast('Couldn\'t read any subtitle lines from that file');return}
-  CUES=c;$('srtDrop').classList.add('done');$('srtLabel').textContent=`${f.name}: ${c.length} lines, ${fmt(c[c.length-1].b)}`;onScript()});
+  CUES=c;$('srtDrop').classList.add('done');$('srtLabel').textContent=`${f.name}: ${c.length} lines, ${fmt(c[c.length-1].b)}`;detectFull();onScript();
+  if(FULL)toast(`Whole-story narration: found ${FULL.found} of ${FULL.n} chapters. Pick any chapter and it plays its own part.`,6000)});
 bindDrop($('audDrop'),$('audFile'),async f=>{
-  $('audLabel').textContent='Loading…';
-  if(audioURL)URL.revokeObjectURL(audioURL);audioURL=URL.createObjectURL(f);aud.src=audioURL;
-  try{const ab=await f.arrayBuffer();const ac=new(window.OfflineAudioContext||window.webkitOfflineAudioContext)(2,48000,48000);audioBuf=await ac.decodeAudioData(ab);audioDur=audioBuf.duration}
-  catch(e){audioBuf=null;await new Promise(r=>{aud.onloadedmetadata=r;setTimeout(r,4000)});audioDur=aud.duration||0;toast('Audio plays in preview, but this browser can\'t decode it for export. Try an mp3 or wav.')}
-  $('audDrop').classList.add('done');$('audLabel').textContent=`${f.name}: ${fmt(audioDur)}`;onScript()});
+  $('audLabel').textContent='Reading audio…';
+  try{SRC=await makeSource(f)}catch(e){SRC=null;$('audLabel').textContent='Couldn\'t read that audio';toast(e&&e.message?e.message:'Couldn\'t read that audio file. Try MP3 or WAV.',6000);return}
+  if(audioURL)URL.revokeObjectURL(audioURL);audioURL=URL.createObjectURL(f);aud.src=audioURL;audioDur=SRC.duration;
+  $('audDrop').classList.add('done');$('audLabel').textContent=`${f.name}: ${fmt(audioDur)}${audioDur>1800?' · whole story':''}`;detectFull();onScript()});
+
+/* ================= narration audio: read only the part each chapter needs ================= */
+let SRC=null; // {kind,duration,getSegment(t0,t1)->AudioBuffer}
+async function makeSource(file){
+  const head=new Uint8Array(await file.slice(0,12).arrayBuffer());
+  const s4=a=>String.fromCharCode(...head.slice(a,a+4));
+  if(s4(0)==='RIFF'&&s4(8)==='WAVE')return await wavSource(file);
+  const isMp3=/\.mp3$/i.test(file.name)||file.type==='audio/mpeg'||(head[0]===0x49&&head[1]===0x44&&head[2]===0x33)||(head[0]===0xFF&&(head[1]&0xE0)===0xE0);
+  if(isMp3){try{return await mp3Source(file)}catch(e){console.warn(e)}}
+  return await fullSource(file);
+}
+function bufFromPlanar(chs,sr){const n=Math.max(1,chs[0].length);const b=new AudioBuffer({length:n,numberOfChannels:chs.length,sampleRate:sr});chs.forEach((c,i)=>{if(c.length)b.copyToChannel(c,i)});return b}
+async function wavSource(file){
+  const hb=new DataView(await file.slice(0,Math.min(file.size,1<<20)).arrayBuffer());let p=12,f=null,dataOff=0,dataLen=0;
+  while(p+8<=hb.byteLength){const id=String.fromCharCode(hb.getUint8(p),hb.getUint8(p+1),hb.getUint8(p+2),hb.getUint8(p+3));const sz=hb.getUint32(p+4,true);
+    if(id==='fmt '){f={code:hb.getUint16(p+8,true),ch:hb.getUint16(p+10,true),sr:hb.getUint32(p+12,true),align:hb.getUint16(p+20,true),bits:hb.getUint16(p+22,true)};if(f.code===0xFFFE&&sz>=40)f.code=hb.getUint16(p+32,true)}
+    if(id==='data'){dataOff=p+8;dataLen=sz;break}
+    p+=8+sz+(sz&1)}
+  if(!f||!dataOff)throw new Error('Unreadable WAV file');
+  if(!dataLen||dataLen>file.size-dataOff)dataLen=file.size-dataOff;
+  const frames=Math.floor(dataLen/f.align);
+  return{kind:'wav',duration:frames/f.sr,async getSegment(t0,t1){
+    const a=clamp(Math.floor(t0*f.sr),0,frames),b=clamp(Math.ceil(t1*f.sr),a,frames),n=b-a;
+    const dv=new DataView(await file.slice(dataOff+a*f.align,dataOff+b*f.align).arrayBuffer());
+    const chs=Array.from({length:f.ch},()=>new Float32Array(n));const bps=f.bits/8;
+    for(let i=0;i<n;i++)for(let c=0;c<f.ch;c++){const o=i*f.align+c*bps;let v;
+      if(f.code===3)v=bps===8?dv.getFloat64(o,true):dv.getFloat32(o,true);
+      else if(bps===2)v=dv.getInt16(o,true)/32768;else if(bps===3)v=(dv.getUint8(o)|dv.getUint8(o+1)<<8|dv.getInt8(o+2)<<16)/8388608;
+      else if(bps===4)v=dv.getInt32(o,true)/2147483648;else v=(dv.getUint8(o)-128)/128;chs[c][i]=v}
+    return bufFromPlanar(chs,f.sr)}}
+}
+async function mp3Source(file){
+  const u=new Uint8Array(await file.arrayBuffer());let i=0;
+  if(u[0]===0x49&&u[1]===0x44&&u[2]===0x33)i=10+((u[6]&127)<<21|(u[7]&127)<<14|(u[8]&127)<<7|(u[9]&127))+((u[5]&16)?10:0);
+  const B1=[0,32,40,48,56,64,80,96,112,128,160,192,224,256,320],B2=[0,8,16,24,32,40,48,56,64,80,96,112,128,144,160],SR={3:[44100,48000,32000],2:[22050,24000,16000],0:[11025,12000,8000]};
+  const hdr=j=>{if(j+4>u.length||u[j]!==0xFF||(u[j+1]&0xE0)!==0xE0)return null;const ver=(u[j+1]>>3)&3,layer=(u[j+1]>>1)&3,bri=u[j+2]>>4,sri=(u[j+2]>>2)&3,pad=(u[j+2]>>1)&1;
+    if(ver===1||layer!==1||bri===0||bri===15||sri===3)return null;const m1=ver===3;const br=(m1?B1:B2)[bri]*1000,sr=SR[ver][sri];const len=Math.floor((m1?144:72)*br/sr)+pad;return len>4?{len,sr,spf:m1?1152:576}:null};
+  const offs=[];let sr=0,spf=0;
+  while(i<u.length-4){const h=hdr(i);if(h&&(i+h.len>=u.length-4||hdr(i+h.len))){if(!sr){sr=h.sr;spf=h.spf}offs.push(i);i+=h.len}else i++}
+  if(offs.length<10)throw new Error('Not an MP3 stream');
+  if(/Xing|Info/.test(String.fromCharCode(...u.slice(offs[0]+4,offs[0]+44))))offs.shift();
+  const O=Uint32Array.from(offs),N=O.length,size=u.length;
+  return{kind:'mp3',duration:N*spf/sr,async getSegment(t0,t1){
+    const a=clamp(Math.floor(t0*sr/spf)-30,0,N-1),b=clamp(Math.ceil(t1*sr/spf)+4,a+1,N);
+    const dec=await new OfflineAudioContext(1,sr,sr).decodeAudioData(await file.slice(O[a],b<N?O[b]:size).arrayBuffer());
+    const endT=(b<N?b:N)*spf/sr,off=clamp(Math.round(dec.length-(endT-t0)*dec.sampleRate),0,dec.length-1),n=Math.max(1,Math.min(dec.length-off,Math.round((t1-t0)*dec.sampleRate)));
+    const chs=[];for(let c=0;c<dec.numberOfChannels;c++)chs.push(dec.getChannelData(c).slice(off,off+n));return bufFromPlanar(chs,dec.sampleRate)}}
+}
+async function fullSource(file){
+  if(file.size>120*1048576)throw new Error('This audio format is too big to cut up in the browser. Please export your narration as MP3 or WAV.');
+  const dec=await new OfflineAudioContext(1,48000,48000).decodeAudioData(await file.arrayBuffer());
+  return{kind:'other',duration:dec.duration,async getSegment(t0,t1){const o=clamp(Math.round(t0*dec.sampleRate),0,dec.length-1),n=Math.max(1,Math.min(dec.length-o,Math.round((t1-t0)*dec.sampleRate)));
+    const chs=[];for(let c=0;c<dec.numberOfChannels;c++)chs.push(dec.getChannelData(c).slice(o,o+n));return bufFromPlanar(chs,dec.sampleRate)}}
+}
+
+/* ================= one narration for the whole story: find each chapter inside it ================= */
+let FULL=null,CH_OFF=0,CH_LEN=0;
+function wordStream(){if(wordStream.c===CUES&&wordStream.w)return wordStream.w;const W=[];(CUES||[]).forEach(c=>{const ws=norm(c.t);const L=ws.reduce((s,w)=>s+w.length+1,0)||1;let acc=0;ws.forEach(w=>{W.push({w,t:c.a+(c.b-c.a)*acc/L});acc+=w.length+1})});wordStream.c=CUES;wordStream.w=W;return W}
+function chapterMsgs(i){const s=CHAPTERS[i];return parseScript(STORY_IS_CHAT?convertChat(s,$('optNarr').checked,ALLCOUNTS):convert(s,$('optNarr').checked))}
+function detectFull(){
+  FULL=null;if(!CUES||CHAPTERS.length<2)return;const W=wordStream();if(W.length<300)return;
+  const n=CHAPTERS.length,starts=new Array(n).fill(null),tok=new Array(n).fill(0);let p=0,found=0;
+  for(let i=0;i<n;i++){const ms=chapterMsgs(i);tok[i]=ms.reduce((s,m)=>s+norm(m.text).length,0);let before=0,hit=-1;
+    let own=0;for(let k=0;k<Math.min(ms.length,30)&&hit<0;k++){const toks=norm(ms[k].text);own=ms[k].kind==='b'?norm(ms[k].who).length:0;
+      if(ms[k].kind!=='c'&&toks.length>=4){const K=Math.min(7,toks.length),need=Math.ceil(K*.8),lim=Math.min(W.length,p+30000);
+        for(let j=p;j<lim;j++){if(!lev1(W[j].w,toks[0]))continue;let s=0;for(let q=0;q<K&&j+q<W.length;q++)if(lev1(W[j+q].w,toks[q]))s++;if(s>=need){hit=j;break}}}
+      if(hit<0)before+=toks.length+(ms[k].kind==='b'?norm(ms[k].who).length:0)}
+    if(hit>=0){const sw=Math.max(p,hit-before-own);starts[i]=W[sw].t;p=hit+Math.floor(tok[i]*.6);found++}}
+  if(found<2)return;
+  const end=Math.max(CUES[CUES.length-1].b+1.5,SRC?SRC.duration:0);
+  // estimate any chapter we could not find from its neighbours, by length
+  for(let i=0;i<n;i++)if(starts[i]==null){let a=i-1;while(a>=0&&starts[a]==null)a--;let b=i+1;while(b<n&&starts[b]==null)b++;
+    const ta=a>=0?starts[a]:0,tb=b<n?starts[b]:end;let sa=0,si=0;for(let k=Math.max(a,0);k<b;k++){if(k<i&&k>=Math.max(a,0))si+=tok[k];sa+=tok[k]}
+    starts[i]=ta+(tb-ta)*(a<0&&i===0?0:si/(sa||1))}
+  for(let i=0;i<n;i++){starts[i]=Math.max(0,starts[i]-.25);if(i&&starts[i]<starts[i-1]+1)starts[i]=starts[i-1]+1}
+  starts[0]=Math.min(starts[0],Math.max(0,CUES[0].a-.25));
+  const ends=starts.map((s,i)=>i<n-1?starts[i+1]:end);
+  FULL={starts,ends,found,n};
+}
+function setChapterWindow(){const i=CHAPTERS.length>1?(parseInt($('chapSel').value)||0):0;
+  if(FULL){CH_OFF=FULL.starts[i];CH_LEN=FULL.ends[i]-CH_OFF}else{CH_OFF=0;CH_LEN=SRC?SRC.duration:0}}
 
 /* ================= export (WebCodecs → MP4) ================= */
 let cancelExport=false;
@@ -2679,9 +2768,9 @@ async function saveFile(blob,name){
   if(downloads){try{await downloads.save({filename:name,data:blob});return'saved'}catch(e){if(e&&e.code==='declined')return'declined';if(e&&e.code==='too_large'){toast('File too large to save here. Try 1280×720.');return'fail'}}}
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},60000);return'saved'}
 async function mixAudio(dur){
-  const sr=48000,vol=parseFloat($('popVol').value)||0;if(!audioBuf&&!vol)return null;
+  const sr=48000,vol=parseFloat($('popVol').value)||0;if(!SRC&&!vol)return null;
   const oc=new OfflineAudioContext(2,Math.ceil(dur*sr),sr);
-  if(audioBuf){const s=oc.createBufferSource();s.buffer=audioBuf;s.connect(oc.destination);s.start(PRE)}
+  if(SRC){$('expMsg').textContent='Cutting this chapter\'s narration…';const seg=await SRC.getSegment(CH_OFF,CH_OFF+Math.max(.1,Math.min(CH_LEN,dur-PRE)));const s=oc.createBufferSource();s.buffer=seg;s.connect(oc.destination);s.start(PRE)}
   if(vol){MSGS.forEach(m=>{if(m.kind!=='b'||m.t+PRE>dur-.2)return;const o=oc.createOscillator(),g=oc.createGain(),n=m.t+PRE;o.type='sine';o.frequency.setValueAtTime(880,n);o.frequency.exponentialRampToValueAtTime(1320,n+.05);g.gain.setValueAtTime(0,n);g.gain.linearRampToValueAtTime(.18*vol,n+.008);g.gain.exponentialRampToValueAtTime(.0001,n+.14);o.connect(g);g.connect(oc.destination);o.start(n);o.stop(n+.16)})}
   return await oc.startRendering()}
 async function pickVideoCodec(W,H,fps){
@@ -2690,16 +2779,23 @@ async function pickVideoCodec(W,H,fps){
   for(const[k,c]of tries){try{const cfg={codec:c,width:W,height:H,bitrate:br,framerate:fps};if(k==='avc')cfg.avc={format:'avc'};const r=await VideoEncoder.isConfigSupported(cfg);if(r.supported)return{kind:k,cfg}}catch(_){}}
   return null}
 async function pickAudioCodec(){for(const[k,c]of[['aac','mp4a.40.2'],['opus','opus']]){try{const r=await AudioEncoder.isConfigSupported({codec:c,sampleRate:48000,numberOfChannels:2,bitrate:160000});if(r.supported)return{kind:k,cfg:{codec:c,sampleRate:48000,numberOfChannels:2,bitrate:160000}}}catch(_){}}return null}
-$('exportBtn').addEventListener('click',async()=>{
-  if(!MSGS.length){toast('Nothing to export yet: convert a chapter first');return}
-  if(!('VideoEncoder' in window)){toast('Export needs Chrome or Edge (desktop).',5000);return}
+let exportingAll=false;
+$('exportBtn').addEventListener('click',()=>exportCurrent());
+$('exportAllBtn').addEventListener('click',async()=>{if(CHAPTERS.length<2||exportingAll)return;exportingAll=true;cancelExport=false;$('exportAllBtn').disabled=true;
+  const startAt=parseInt($('chapSel').value)||0;let done=0;
+  try{for(let i=startAt;i<CHAPTERS.length;i++){pickChapter(i);await new Promise(r=>setTimeout(r,80));$('encInfo').textContent=`chapter ${i+1} of ${CHAPTERS.length}`;
+    const r=await exportCurrent(true);if(r!=='saved')break;done++}}
+  finally{exportingAll=false;$('exportAllBtn').disabled=false;$('expMsg').textContent=`Exported ${done} chapter${done===1?'':'s'}.`}});
+async function exportCurrent(batch){
+  if(!MSGS.length){toast('Nothing to export yet: convert a chapter first');return'fail'}
+  if(!('VideoEncoder' in window)){toast('Export needs Chrome or Edge (desktop).',5000);return'fail'}
   try{await document.fonts.ready}catch(_){}
   playing=false;aud.pause();$('playBtn').textContent='▶ Play';
   const[W,H]=RES,fps=30;const dur=calcDuration();const N=Math.ceil(dur*fps);
-  const vc=await pickVideoCodec(W,H,fps);if(!vc){toast('This browser can\'t encode video. Try Chrome or Edge.',5000);return}
+  const vc=await pickVideoCodec(W,H,fps);if(!vc){toast('This browser can\'t encode video. Try Chrome or Edge.',5000);return'fail'}
   const mixed=await mixAudio(dur);const ac=mixed?await pickAudioCodec():null;
   if(mixed&&!ac)toast('This browser can\'t encode audio, so the video will be silent.',5000);
-  $('exportBtn').disabled=true;$('cancelBtn').style.display='';cancelExport=false;
+  $('exportBtn').disabled=true;$('cancelBtn').style.display='';if(!batch)cancelExport=false;let result='fail';
   $('encInfo').textContent=`${W}×${H} · ${vc.kind.toUpperCase()}${ac?' + '+ac.kind.toUpperCase():''}`;
   const muxer=new Mp4Muxer.Muxer({target:new Mp4Muxer.ArrayBufferTarget(),video:{codec:vc.kind,width:W,height:H,frameRate:fps},audio:ac?{codec:ac.kind,numberOfChannels:2,sampleRate:48000}:undefined,fastStart:'in-memory',firstTimestampBehavior:'offset'});
   let encErr=null;
@@ -2725,17 +2821,17 @@ $('exportBtn').addEventListener('click',async()=>{
     }
     L=saveL;
     if(encErr)throw encErr;
-    if(cancelExport){$('expMsg').textContent='Export cancelled.';return}
+    if(cancelExport){$('expMsg').textContent='Export cancelled.';return'cancel'}
     $('expMsg').textContent='Finishing file…';await venc.flush();muxer.finalize();
     const blob=new Blob([muxer.target.buffer],{type:'video/mp4'});
     const name=`Chapter ${String($('chNum').value||1).padStart(2,'0')} - ${($('chTitle').value||'Chat').replace(/[\\/:*?"<>|]+/g,'').slice(0,80)}.mp4`;
     $('progBar').style.width='100%';
-    const r=await saveFile(blob,name);
+    const r=await saveFile(blob,name);result=r;
     $('expMsg').textContent=r==='saved'?`Done: ${name} (${(blob.size/1048576).toFixed(1)} MB)`:r==='declined'?'Save cancelled. Click Export to try again.':'Couldn\'t save the file.';
   }catch(e){console.error(e);$('expMsg').textContent='Export failed: '+(e&&e.message?e.message:e)}
   finally{try{venc.state!=='closed'&&venc.close()}catch(_){}try{aenc&&aenc.state!=='closed'&&aenc.close()}catch(_){}
-    $('exportBtn').disabled=false;$('cancelBtn').style.display='none';relayout()}
-});
+    $('exportBtn').disabled=false;$('cancelBtn').style.display=exportingAll?'':'none';relayout()}
+  return result}
 $('cancelBtn').addEventListener('click',()=>{cancelExport=true});
 
 /* ================= init ================= */
@@ -2765,7 +2861,7 @@ else{$('story').value=DEMO;$('script').value=convert(DEMO,true);$('chTitle').val
 updateWordCount();refreshChapters();onScript();
 if(document.fonts&&document.fonts.ready)document.fonts.ready.then(relayout);
 requestAnimationFrame(tick);
-window.__test={convert,parseSRT,state:()=>({MSGS,duration,alignInfo,L}),setCues:c=>{CUES=c;onScript()},drawAt:t=>{T=t;performanceT=t;pctx.setTransform(pv.width/RES[0],0,0,pv.height/RES[1],0,0);drawFrame(pctx,t)}};
+window.__test={full:()=>({FULL,CH_OFF,CH_LEN}),ws:()=>wordStream(),cm:i=>chapterMsgs(i).slice(0,8).map(m=>[m.kind,m.who||'',m.text]),convert,parseSRT,state:()=>({MSGS,duration,alignInfo,L}),setCues:c=>{CUES=c;onScript()},drawAt:t=>{T=t;performanceT=t;pctx.setTransform(pv.width/RES[0],0,0,pv.height/RES[1],0,0);drawFrame(pctx,t)}};
 })();
 </script>
 </body>
