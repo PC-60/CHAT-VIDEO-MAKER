@@ -107,7 +107,7 @@ input[type=file]{display:none}
         <button class="btn p" id="convertBtn">Convert to chat script →</button>
         <label class="check"><input type="checkbox" id="optNarr" checked> Keep narration as grey notes</label>
       </div>
-      <p class="hint">Dialogue in quotes becomes chat bubbles. The speaker is found from words like <code>says Ash</code> or <code>Brock asks</code>. Lines it isn't sure about get a <code>?</code> in step 3 so you can check them.</p>
+      <p class="hint">Works with both kinds of story. <b>Chat-format stories</b> (<code>[Group Chat]</code>, <code>User: message</code>) are read directly. In <b>normal prose</b>, dialogue in quotes becomes chat bubbles. The speaker is found from words like <code>says Ash</code> or <code>Brock asks</code>. Lines it isn't sure about get a <code>?</code> in step 3 so you can check them.</p>
     </div>
   </div>
 
@@ -139,7 +139,7 @@ input[type=file]{display:none}
         <button class="btn" id="clearUnsure">Accept all guesses</button>
         <span class="muted" style="font-size:12px" id="cursorInfo"></span>
       </div>
-      <p class="hint">One message per line. <code>Name: text</code> is a bubble, <code>&gt; text</code> is a grey narration note, <code># Title</code> changes the chat title. A <code>?</code> after a name means a guessed speaker: fix it or leave it, since the <code>?</code> never shows in the video. To pin a time, start the line with <code>[1:23.5]</code>.</p>
+      <p class="hint">One message per line. <code>Name: text</code> is a bubble, <code>[Chat name]</code> switches to another group chat, <code>! Rose has left the chat</code> is a system notice (a line with "typing" shows typing dots), and <code>&gt; text</code> is a grey narration note. Chat-format stories are read as-is. A <code>?</code> after a name means a guessed speaker: fix it or leave it, since the <code>?</code> never shows in the video. To pin a time, start the line with <code>[1:23.5]</code>.</p>
     </div>
   </div>
 
@@ -2185,18 +2185,44 @@ function convert(text,keepNarr){
 /* ================= script parsing ================= */
 let MSGS=[];let titleAt=[];
 function parseScript(src){
-  const msgs=[];titleAt=[];
+  const msgs=[];titleAt=[];let chat='';
   src.split('\n').forEach((raw,ln)=>{
     let line=raw.trim();if(!line)return;
     let pin=null;const tm=line.match(/^\[(\d+):(\d+(?:\.\d+)?)\]\s*|^\[(\d+(?:\.\d+)?)\]\s*/);
     if(tm){pin=tm[3]!=null?parseFloat(tm[3]):parseInt(tm[1])*60+parseFloat(tm[2]);line=line.slice(tm[0].length)}
-    if(line.startsWith('#')){titleAt.push({idx:msgs.length,title:line.replace(/^#+\s*/,''),ln});return}
-    if(line.startsWith('>')){msgs.push({kind:'n',text:line.replace(/^>\s*/,''),pin,ln});return}
+    if(!line)return;
+    const ch=line.match(/^\[([^\]]+)\]$/)||line.match(/^#+\s*(.+)$/);
+    if(ch){chat=ch[1].trim();msgs.push({kind:'c',text:chat,chat,pin,ln});return}
+    if(line.startsWith('>')){msgs.push({kind:'n',text:line.replace(/^>\s*/,''),chat,pin,ln});return}
+    if(line.startsWith('!')){const s=line.replace(/^!\s*/,'');
+      if(/\btyping\b/i.test(s)){msgs.push({kind:'t',text:s,chat,pin,ln});return}
+      const nm=s.match(/^([^\s]+)\s+(.*)$/);msgs.push({kind:'s',text:s,name:nm?nm[1]:'',rest:nm?nm[2]:s,chat,pin,ln});return}
     const m=line.match(/^([^:]{1,40}?)(\?)?:\s*(.+)$/);
-    if(m&&!/^https?$/i.test(m[1])){msgs.push({kind:'b',who:m[1].trim(),unsure:!!m[2],text:m[3].trim(),pin,ln});return}
-    msgs.push({kind:'n',text:line,pin,ln});
+    if(m&&!/^https?$/i.test(m[1])){msgs.push({kind:'b',who:m[1].trim(),unsure:!!m[2],text:m[3].trim(),chat,pin,ln});return}
+    msgs.push({kind:'n',text:line,chat,pin,ln});
   });
   return msgs;
+}
+/* chat-format stories (chatfics): "[Chat]", "User: text", system lines */
+function looksLikeChat(text){const ls=text.split('\n').map(s=>s.trim()).filter(Boolean);if(ls.length<4)return false;
+  const c=ls.filter(l=>/^[^\s:“"]{1,32}:/.test(l)||/^\[[^\]]{2,60}\]$/.test(l)).length;return c/ls.length>0.45}
+const SYSRE=/^(\S+)\s+(?:has|have|had|was|is|forcibly|fled|left|joined|entered|raided|banned|kicked|removed|added|created|changed|renamed|pinned|muted|unmuted|re-entered|returned|logged|went|came)\b/i;
+function convertChat(text,keepNarr){
+  const ls=text.replace(/\r/g,'').split('\n').map(s=>s.trim()).filter(Boolean);
+  const senders=new Set();ls.forEach(l=>{const m=l.match(/^([^\s:“"]{1,32}):/);if(m)senders.add(m[1])});
+  const out=[];
+  ls.forEach(l=>{
+    if(/^\[[^\]]+\]$/.test(l)&&!/^\[\d/.test(l)){out.push(l);return}
+    if(/\btyping(…|\.\.\.)?\s*$/i.test(l)&&!/^[^\s:]{1,32}:/.test(l)){out.push('! '+l);return}
+    const sm=l.match(SYSRE);
+    if(sm&&(senders.has(sm[1])||/bot$/i.test(sm[1])||!l.includes(':'))){out.push('! '+l);return}
+    const m=l.match(/^([^\s:“"]{1,32}):\s*(.*)$/);
+    if(m){if(m[2].trim())out.push(`${m[1]}: ${m[2].trim()}`);return}
+    const tok=l.match(/^(\S+)\s+(.+)$/);
+    if(tok&&senders.has(tok[1])){out.push(`${tok[1]}: ${tok[2]}`);return}
+    if(keepNarr)splitSentences(l).forEach(s=>out.push('> '+s));
+  });
+  return out.join('\n');
 }
 
 /* ================= SRT + timing ================= */
@@ -2229,7 +2255,7 @@ function computeTimes(msgs){
   }else if(audioDur>0){
     const tot=wcs.reduce((a,b)=>a+b,0);let acc=0;msgs.forEach((m,i)=>{times[i]=.4+(audioDur-1)*acc/tot;acc+=wcs[i]});alignInfo='spread across audio length';
   }else{
-    const wpm=Math.max(60,parseFloat($('wpm').value)||150);let t=.6;msgs.forEach((m,i)=>{times[i]=t;t+=Math.max(1.1,wcs[i]/wpm*60)+.25});alignInfo='';
+    const wpm=Math.max(60,parseFloat($('wpm').value)||150);let t=.6;msgs.forEach((m,i)=>{times[i]=t;t+=m.kind==='c'?1.2:m.kind==='t'?2.5:m.kind==='s'?Math.max(.9,wcs[i]/wpm*60*.7):Math.max(1.1,wcs[i]/wpm*60)+.25});alignInfo='';
   }
   for(let i=0;i<msgs.length;i++){if(msgs[i].pin!=null)times[i]=msgs[i].pin;else times[i]+=off;if(i&&times[i]<times[i-1]+.05&&msgs[i].pin==null)times[i]=times[i-1]+.05;msgs[i].t=Math.max(0,times[i])}
 }
@@ -2240,14 +2266,19 @@ let CAST=store.get('cast',{});
 let CHAP_COUNTS=store.get('chapCounts',{});
 let ME_MODE=store.get('meMode','auto');
 const hashStr=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0};
+const TYPEC={fire:'#ff7a3c',water:'#4c9dff',grass:'#3fc46a',electric:'#f5c518',ice:'#5fd0ee',fight:'#e0603f',fighting:'#e0603f',poison:'#a95fe0',ground:'#d4a24c',flying:'#8fa8ff',psychic:'#ff5c9a',phychic:'#ff5c9a',bug:'#9bc23a',rock:'#b9a25b',ghost:'#7c64d8',dragon:'#6a5cff',dark:'#8a7fa6',steel:'#8ea4b8',fairy:'#ff8fd0',normal:'#a8a29e',champ:'#f2b632',chair:'#94a3b8'};
 function castFor(name){
   if(!CAST[name]){
-    const used=new Set(Object.values(CAST).map(c=>c.color));let k=hashStr(name.toLowerCase())%PAL.length,tries=0;
-    while(used.has(PAL[k])&&tries<PAL.length){k=(k+1)%PAL.length;tries++}
-    CAST[name]={color:PAL[k],av:initials(name),img:null};saveCast();
+    const pre=name.split(/[.\s_]/)[0].toLowerCase();let color=null;
+    if(/[.\s_]/.test(name)&&TYPEC[pre])color=TYPEC[pre];
+    if(!color){const used=new Set(Object.values(CAST).map(c=>c.color));let k=hashStr(name.toLowerCase())%PAL.length,tries=0;
+      while(used.has(PAL[k])&&tries<PAL.length){k=(k+1)%PAL.length;tries++}color=PAL[k]}
+    CAST[name]={color,av:initials(name),img:null};saveCast();
   }
   return CAST[name]}
-function initials(n){const w=n.replace(/[^\p{L}\p{N}\s]/gu,'').trim().split(/\s+/);return((w[0]||'?')[0]+(w[1]?w[1][0]:'')).toUpperCase()}
+function initials(n){let s=n;if(s.includes('.')){const p=s.split('.').filter(Boolean);const last=p[p.length-1]||'';s=(/^[a-z]+$/.test(last)?p[0]:last)||n}
+  const w=s.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/[^\p{L}\p{N}\s]/gu,' ').trim().split(/\s+/).filter(x=>x&&!/^(the|of|a|an)$/i.test(x));
+  return((w[0]||'?')[0]+(w[1]?w[1][0]:'')).toUpperCase()}
 function chapterCounts(){const c={};MSGS.forEach(m=>{if(m.kind==='b')c[m.who]=(c[m.who]||0)+1});return c}
 function meName(){
   if(ME_MODE&&ME_MODE!=='auto'&&ME_MODE!=='none')return ME_MODE;
@@ -2255,12 +2286,15 @@ function meName(){
   const tot={};Object.values(CHAP_COUNTS).forEach(cc=>Object.entries(cc).forEach(([n,v])=>tot[n]=(tot[n]||0)+v));
   Object.entries(chapterCounts()).forEach(([n,v])=>tot[n]=(tot[n]||0)+v*0.001); // tie-break by this chapter
   let best=null,bv=-1;Object.entries(tot).forEach(([n,v])=>{if(v>bv&&n!=='Narrator'){bv=v;best=n}});return best}
-function isMe(name){return name===ME}
-let ME=null;
+let ME=null,CHAT_ME={};
+function isMe(name,chat){return(chat in CHAT_ME?CHAT_ME[chat]:ME)===name}
+function computeChatMe(){CHAT_ME={};const per={};MSGS.forEach(m=>{if(m.kind!=='b')return;(per[m.chat]=per[m.chat]||{})[m.who]=(per[m.chat][m.who]||0)+1});
+  Object.entries(per).forEach(([c,cnt])=>{if(ME_MODE==='none'){CHAT_ME[c]=null;return}if(ME&&cnt[ME]){CHAT_ME[c]=ME;return}
+    CHAT_ME[c]=Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0][0]})}
 const IMG={};function imgFor(c){if(!c.img)return null;if(!IMG[c.img]){const i=new Image();i.onload=()=>{relayout()};i.src=c.img;IMG[c.img]=i}return IMG[c.img].complete&&IMG[c.img].naturalWidth?IMG[c.img]:null}
 function renderCast(){
   const counts=chapterCounts();const names=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]);
-  names.forEach(castFor);ME=meName();
+  names.forEach(castFor);ME=meName();computeChatMe();
   const sel=$('meSel');const keep=ME_MODE;sel.innerHTML='';
   const auto=document.createElement('option');auto.value='auto';auto.textContent=`Auto: main character${ME&&ME_MODE==='auto'?' ('+ME+')':''}`;sel.appendChild(auto);
   const none=document.createElement('option');none.value='none';none.textContent='Nobody (everyone on the left)';sel.appendChild(none);
@@ -2268,8 +2302,8 @@ function renderCast(){
   sel.value=keep;
   const el=$('cast');el.innerHTML='';
   if(!names.length){el.innerHTML='<span class="muted" style="font-size:12px">Characters are added here automatically when you convert a chapter.</span>';return}
-  names.forEach(n=>{const c=castFor(n);const r=document.createElement('div');r.className='castrow'+(n===ME?' me':'');
-    r.innerHTML=`<button class="av" title="Add a picture for ${esc(n)}" style="background:${c.color}">${c.img?`<img src="${c.img}" alt="">`:esc(c.av)}</button><input type="text" value="${esc(n)}" title="Rename everywhere in the script"><input type="color" value="${c.color}" title="Colour"><span class="cnt">${n===ME?'<b>me</b> · ':''}${counts[n]}</span>`;
+  names.forEach(n=>{const c=castFor(n);const isM=Object.values(CHAT_ME).includes(n);const r=document.createElement('div');r.className='castrow'+(isM?' me':'');
+    r.innerHTML=`<button class="av" title="Add a picture for ${esc(n)}" style="background:${c.color}">${c.img?`<img src="${c.img}" alt="">`:esc(c.av)}</button><input type="text" value="${esc(n)}" title="Rename everywhere in the script"><input type="color" value="${c.color}" title="Colour"><span class="cnt">${isM?'<b>me</b> · ':''}${counts[n]}</span>`;
     const avB=r.querySelector('.av'),nameI=r.querySelector('input[type=text]'),colI=r.querySelector('input[type=color]');
     avB.addEventListener('click',()=>pickAvatar(n));
     avB.addEventListener('contextmenu',e=>{e.preventDefault();if(c.img){c.img=null;saveCast();renderCast();relayout();toast('Picture removed')}});
@@ -2321,9 +2355,11 @@ function layout(W,H){
   const showNames=$('optNames').checked,showTime=$('optTime').checked;
   c.font=`500 ${11.5*g.u}px ${FONT}`;const timeW=c.measureText('12:59 PM ✓✓').width+8*g.ui;
   const items=MSGS.map((m,i)=>{
+    if(m.kind==='c'||m.kind==='t')return{m,kind:m.kind,h:0,lines:[],w:0};
+    if(m.kind==='s'){c.font=`italic 400 ${fs*.84}px ${FONT}`;const lines=wrap(c,m.text,g.CW*.86);return{m,lines,w:0,h:lines.length*lh*.84+py*1.1,kind:'s'}}
     if(m.kind==='n'){c.font=`italic 400 ${fs*.86}px ${FONT}`;const maxW=g.CW*.82-px*2;const lines=wrap(c,m.text,maxW);const w=Math.max(...lines.map(l=>c.measureText(l).width))+px*2;return{m,lines,w,h:lines.length*lh*.9+py*2,kind:'n'}}
-    const cast=castFor(m.who);const right=isMe(m.who);
-    const prevB=i>0?MSGS[i-1]:null;const first=!(prevB&&prevB.kind==='b'&&prevB.who===m.who);
+    const cast=castFor(m.who);const right=isMe(m.who,m.chat);
+    const prevB=i>0?MSGS[i-1]:null;const first=!(prevB&&prevB.kind==='b'&&prevB.who===m.who&&prevB.chat===m.chat);
     c.font=`400 ${fs}px ${FONT}`;const maxW=g.CW*(right?.68:.64)-px*2-(showTime?timeW*.15:0);const lines=wrap(c,m.text,maxW);const w=Math.max(...lines.map(l=>c.measureText(l).width))+px*2;
     const nh=(!right&&first&&showNames)?nameH:0;
     return{m,lines,w,h:nh+lines.length*lh+py*2,nh,kind:'b',right,first,cast}});
@@ -2380,29 +2416,34 @@ function drawChat(ctx,tc,g,items,th){
   if(th.panel){ctx.save();ctx.shadowColor=th.shadow;ctx.shadowBlur=50*ui;ctx.shadowOffsetY=14*ui;ctx.fillStyle=th.panel;rrect(ctx,panelX,pTop,panelW,pBot-pTop,26*ui);ctx.fill();ctx.restore();
     ctx.strokeStyle=th.border;ctx.lineWidth=1*ui;rrect(ctx,panelX+.5,pTop+.5,panelW-1,pBot-pTop-1,26*ui);ctx.stroke()}
   const n=lastIdx(tc);
+  const cur=n>=0?MSGS[n].chat:(MSGS[0]?MSGS[0].chat:'');
+  let secT=-1e9;for(let i=n;i>=0;i--){if(MSGS[i].kind==='c'){secT=MSGS[i].t;break}}
+  const fin=clamp((tc-secT)/.45);
   ctx.save();rrect(ctx,panelX,pTop,panelW,pBot-pTop,26*ui);ctx.clip();
   // header
   const hy=pTop,hh=g.headH;
   if(th.head){ctx.fillStyle=th.head;ctx.fillRect(panelX,hy,panelW,hh);ctx.fillStyle=th.border;ctx.fillRect(panelX,hy+hh-1*ui,panelW,1*ui)}
   ctx.strokeStyle=th.sub;ctx.lineWidth=2.4*ui;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo(cx+10*ui,hy+hh/2-8*ui);ctx.lineTo(cx+2*ui,hy+hh/2);ctx.lineTo(cx+10*ui,hy+hh/2+8*ui);ctx.stroke();
-  const who=[...new Set(MSGS.slice(0,Math.max(1,n+1)).filter(m=>m.kind==='b').map(m=>m.who))].filter(w=>!isMe(w)).slice(0,3);
+  ctx.save();ctx.globalAlpha*=fin;
+  const who=[...new Set(MSGS.slice(0,Math.max(1,n+1)).filter(m=>m.kind==='b'&&m.chat===cur).map(m=>m.who).reverse())].filter(w=>!isMe(w,cur)).slice(0,3);
   const ax=cx+28*ui;who.forEach((w,i)=>drawAvatar(ctx,ax+i*22*ui+17*ui,hy+hh/2,17*ui,castFor(w),th,true));
   const tx=ax+(who.length?who.length*22*ui+24*ui:0);
   const typing=typingState(tc,n);
-  ctx.fillStyle=th.title;ctx.font=`650 ${19*ui}px ${FONT}`;ctx.textBaseline='middle';ctx.fillText(fitText(ctx,titleFor(n),cx+CW-tx-90*ui),tx,hy+hh/2-10*ui);
+  ctx.fillStyle=th.title;ctx.font=`650 ${19*ui}px ${FONT}`;ctx.textBaseline='middle';ctx.fillText(fitText(ctx,cur||titleFor(n),cx+CW-tx-90*ui),tx,hy+hh/2-10*ui);
   ctx.font=`500 ${13.5*ui}px ${FONT}`;
-  if(typing){ctx.fillStyle=th.accent;ctx.fillText(`${typing.who} is typing…`,tx,hy+hh/2+12*ui)}
-  else{const cnt=new Set(MSGS.filter(m=>m.kind==='b').map(m=>m.who)).size;ctx.fillStyle='#34d399';ctx.beginPath();ctx.arc(tx+4*ui,hy+hh/2+12*ui,3.5*ui,0,7);ctx.fill();ctx.fillStyle=th.sub;ctx.fillText(`${cnt} ${cnt===1?'member':'members'} · online`,tx+13*ui,hy+hh/2+12*ui)}
-  drawHeaderIcons(ctx,cx+CW-8*ui,hy+hh/2,ui,th);
+  if(typing){ctx.fillStyle=th.accent;ctx.fillText(typing.multi?'Several people are typing…':`${typing.who} is typing…`,tx,hy+hh/2+12*ui)}
+  else{const cnt=new Set(MSGS.filter(m=>m.kind==='b'&&m.chat===cur).map(m=>m.who)).size;ctx.fillStyle='#34d399';ctx.beginPath();ctx.arc(tx+4*ui,hy+hh/2+12*ui,3.5*ui,0,7);ctx.fill();ctx.fillStyle=th.sub;ctx.fillText(`${cnt} ${cnt===1?'member':'members'} · online`,tx+13*ui,hy+hh/2+12*ui)}
+  drawHeaderIcons(ctx,cx+CW-8*ui,hy+hh/2,ui,th);ctx.restore();
   // messages
   const areaTop=hy+hh+4*ui,areaBot=pBot-16*ui;
   ctx.beginPath();ctx.rect(panelX,areaTop,panelW,areaBot-areaTop);ctx.clip();
-  let cur=areaBot;
-  if(typing){const e=ease((tc-typing.t0)/.2);const h=typH*e;cur-=h;drawTyping(ctx,typing,cur,e,th,tc);cur-=gap*e}
-  for(let i=n;i>=0&&cur>areaTop-260*ui;i--){const it=items[i];if(!it)continue;const x=(tc-it.m.t)/.32;const e=ease(x);
-    const nextSame=items[i+1]&&items[i+1].kind==='b'&&it.kind==='b'&&items[i+1].m.who===it.m.who;
-    const gp=(i===n?0:(nextSame?gapTight:gap));
-    cur-=gp;const h=it.h*e;cur-=h;drawItem(ctx,it,cur,e,backEase(x),th,i===n||!nextSame)}
+  ctx.globalAlpha*=fin;ctx.translate(0,(1-fin)*24*ui);
+  let yb=areaBot,below=null;
+  if(typing){const e=ease((tc-typing.t0)/.2);const h=typH*e;yb-=h;drawTyping(ctx,typing,yb,e,th,tc,cur);yb-=gap*e}
+  for(let i=n;i>=0&&yb>areaTop-260*ui;i--){const it=items[i];if(!it||it.m.chat!==cur||it.kind==='c'||it.kind==='t')continue;const x=(tc-it.m.t)/.32;const e=ease(x);
+    const nextSame=below&&below.kind==='b'&&it.kind==='b'&&below.m.who===it.m.who;
+    const gp=below?(nextSame?gapTight:gap):0;
+    yb-=gp;const h=it.h*e;yb-=h;drawItem(ctx,it,yb,e,backEase(x),th,!nextSame);below=it}
   ctx.restore();
   if(th.panel){const fg=ctx.createLinearGradient(0,areaTop,0,areaTop+44*ui);fg.addColorStop(0,th.panel);fg.addColorStop(1,th.panel.replace(/,\s*[\d.]+\)$/,',0)'));
     ctx.save();ctx.beginPath();ctx.rect(panelX,areaTop,panelW,44*ui);ctx.clip();ctx.fillStyle=fg;ctx.fillRect(panelX,areaTop,panelW,44*ui);ctx.restore()}
@@ -2421,15 +2462,24 @@ function drawAvatar(ctx,x,y,r,c,th,ring){const ui=L.g.ui;
   else{const gr=ctx.createLinearGradient(x-r,y-r,x+r,y+r);gr.addColorStop(0,c.color);gr.addColorStop(1,shade(c.color,-28));ctx.fillStyle=gr;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();
     ctx.fillStyle='#fff';ctx.font=`700 ${r*.74}px ${FONT}`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(c.av||'?',x,y+r*.05);ctx.textAlign='left'}
   ctx.strokeStyle=c.color;ctx.globalAlpha*=.9;ctx.lineWidth=1.6*ui;ctx.beginPath();ctx.arc(x,y,r+.8*ui,0,7);ctx.stroke();ctx.globalAlpha/=.9}
-function typingState(t,n){if(!$('optTyping').checked)return null;const nx=MSGS[n+1];if(!nx||nx.kind!=='b')return null;const prevT=n>=0?MSGS[n].t:-PRE;const dur=Math.min(1.2,(nx.t-prevT)-.25);if(dur<.35)return null;const t0=nx.t-dur;if(t<t0)return null;return{who:nx.who,t0,cast:castFor(nx.who)}}
+function recentCasts(chat,n){const out=[];for(let i=n;i>=0&&out.length<3;i--){const m=MSGS[i];if(m.kind==='b'&&m.chat===chat&&!isMe(m.who,chat)&&!out.includes(m.who))out.push(m.who)}return out.map(castFor)}
+function typingState(t,n){
+  const m=n>=0?MSGS[n]:null;if(m&&m.kind==='t'){const nx=MSGS[n+1];if(!nx||t<nx.t)return{multi:true,t0:m.t,who:'',casts:recentCasts(m.chat,n),cast:null}}
+  if(!$('optTyping').checked)return null;const nx=MSGS[n+1];if(!nx||nx.kind!=='b')return null;if(m&&nx.chat!==m.chat)return null;const prevT=n>=0?MSGS[n].t:-PRE;const dur=Math.min(1.2,(nx.t-prevT)-.25);if(dur<.35)return null;const t0=nx.t-dur;if(t<t0)return null;return{who:nx.who,t0,cast:castFor(nx.who)}}
 function bubbleFill(ctx,th,it,x,y,w,h){if(it.right){const rc=th.right==='char'?[it.cast.color,shade(it.cast.color,-22)]:th.right;const gr=ctx.createLinearGradient(x,y,x+w,y+h);gr.addColorStop(0,rc[0]);gr.addColorStop(1,rc[1]);return gr}return th.left}
-function drawTyping(ctx,ty,y,e,th,t){const{g,px,py,lh,avR}=L;const right=isMe(ty.who);const w=px*2+lh*1.9,h=lh+py*2;
-  const x=right?g.cx+g.CW-w:g.cx+avR*2+12*g.ui;ctx.save();ctx.globalAlpha*=e;
-  if(!right)drawAvatar(ctx,g.cx+avR,y+h-avR,avR,ty.cast,th,false);
+function drawTyping(ctx,ty,y,e,th,t,chat){const{g,px,py,lh,avR}=L;const right=!ty.multi&&isMe(ty.who,chat);const w=px*2+lh*1.9,h=lh+py*2;
+  let x=right?g.cx+g.CW-w:g.cx+avR*2+12*g.ui;ctx.save();ctx.globalAlpha*=e;
+  if(ty.multi){const cs=ty.casts.length?ty.casts:[{color:th.accent,av:'…'}];cs.forEach((c,k)=>drawAvatar(ctx,g.cx+avR+k*avR*1.1,y+h-avR,avR*.9,c,th,true));x+=Math.max(0,cs.length-1)*avR*1.1;ty={...ty,cast:{color:th.accent}}}
+  else if(!right)drawAvatar(ctx,g.cx+avR,y+h-avR,avR,ty.cast,th,false);
   ctx.fillStyle=bubbleFill(ctx,th,{right,cast:ty.cast},x,y,w,h);rrect(ctx,x,y,w,h,h/2);ctx.fill();
   for(let k=0;k<3;k++){const ph=((t*2.6-k*.18)%1+1)%1;const b=Math.sin(clamp(ph*1.6)*Math.PI);ctx.fillStyle=right?'#fff':th.dots;ctx.globalAlpha=e*(.4+.6*b);ctx.beginPath();ctx.arc(x+w/2+(k-1)*lh*.44,y+h/2-b*lh*.16,lh*.12,0,7);ctx.fill()}
   ctx.restore()}
 function drawItem(ctx,it,y,e,eb,th,lastOfRun){const{g,fs,lh,px,py,avR}=L;const ui=g.ui;ctx.save();ctx.globalAlpha*=clamp(e*1.4);ctx.textBaseline='alphabetic';
+  if(it.kind==='s'){ctx.textAlign='left';const cxm=g.cx+g.CW/2;const f1=`italic 400 ${fs*.84}px ${FONT}`,f2=`italic 700 ${fs*.84}px ${FONT}`;
+    if(it.lines.length===1&&it.m.name){ctx.font=f2;const w1=ctx.measureText(it.m.name+' ').width;ctx.font=f1;const w2=ctx.measureText(it.m.rest).width;let x0=cxm-(w1+w2)/2;const yy=y+py*.55+lh*.84*.78;
+      ctx.font=f2;ctx.fillStyle=CAST[it.m.name]?CAST[it.m.name].color:th.title;ctx.fillText(it.m.name+' ',x0,yy);ctx.font=f1;ctx.fillStyle=th.narrText;drawRich(ctx,it.m.rest,x0+w1,yy,th.narrText,th.accent,f1,`italic 700 ${fs*.84}px ${FONT}`)}
+    else{ctx.font=f1;ctx.fillStyle=th.narrText;ctx.textAlign='center';it.lines.forEach((l,k)=>ctx.fillText(l,cxm,y+py*.55+lh*.84*(k+.78)))}
+    ctx.restore();return}
   if(it.kind==='n'){const x=g.cx+(g.CW-it.w)/2;if(th.narr.indexOf(',0)')<0){ctx.fillStyle=th.narr;rrect(ctx,x,y,it.w,it.h,14*ui);ctx.fill()}
     ctx.fillStyle=th.narrText;ctx.font=`italic 400 ${fs*.86}px ${FONT}`;ctx.textAlign='center';
     it.lines.forEach((l,k)=>ctx.fillText(l,g.cx+g.CW/2,y+py+lh*.9*(k+.78)));ctx.restore();return}
@@ -2442,12 +2492,17 @@ function drawItem(ctx,it,y,e,eb,th,lastOfRun){const{g,fs,lh,px,py,avR}=L;const u
   const r=Math.min(20*ui,bh/2),tr=5*ui;
   ctx.save();ctx.shadowColor=th.shadow;ctx.shadowBlur=10*ui;ctx.shadowOffsetY=3*ui;ctx.fillStyle=bubbleFill(ctx,th,it,x,by,it.w,bh);
   ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,by,it.w,bh,it.right?[r,it.first?tr:r,r,r]:[it.first?tr:r,r,r,r]);else ctx.rect(x,by,it.w,bh);ctx.fill();ctx.restore();
-  ctx.fillStyle=it.right?th.rightText:th.leftText;ctx.font=`400 ${fs}px ${FONT}`;
-  it.lines.forEach((l,k)=>ctx.fillText(l,x+px,by+py+lh*(k+.76)));
+  const base=it.right?th.rightText:th.leftText;ctx.fillStyle=base;ctx.font=`400 ${fs}px ${FONT}`;
+  it.lines.forEach((l,k)=>drawRich(ctx,l,x+px,by+py+lh*(k+.76),base,it.right?'#ffffff':th.accent,`400 ${fs}px ${FONT}`,`700 ${fs}px ${FONT}`,it.right));
   if($('optTime').checked&&lastOfRun){ctx.font=`500 ${11.5*g.u}px ${FONT}`;ctx.fillStyle=th.time;const ts=clockText(it.m.t);
     if(it.right){const tw=ctx.measureText(ts+'  ✓✓').width;ctx.fillText(ts,x-tw-6*ui,by+bh-4*ui);ctx.fillStyle=th.tick;ctx.fillText('✓✓',x-ctx.measureText('✓✓').width-6*ui,by+bh-4*ui)}
     else ctx.fillText(ts,x+it.w+8*ui,by+bh-4*ui)}
   ctx.restore()}
+function drawRich(ctx,l,x,y,base,mcol,f1,f2,under){
+  if(l.indexOf('@')<0){ctx.font=f1;ctx.fillStyle=base;ctx.fillText(l,x,y);return}
+  let cx=x;l.split(/(@[\w.\-]+)/).forEach(seg=>{if(!seg)return;const isM=seg[0]==='@';ctx.font=isM?f2:f1;
+    const nm=seg.slice(1).replace(/[.]+$/,'');ctx.fillStyle=isM?(under?mcol:(CAST[nm]?CAST[nm].color:mcol)):base;ctx.fillText(seg,cx,y);const w=ctx.measureText(seg).width;
+    if(isM&&under){ctx.fillRect(cx,y+2*L.g.ui,w,1.4*L.g.ui)}cx+=w});ctx.font=f1}
 function shade(hex,p){const n=parseInt(hex.slice(1),16);let r=n>>16,g=n>>8&255,b=n&255;const f=v=>clamp(Math.round(v+v*p/100),0,255);return`rgb(${f(r)},${f(g)},${f(b)})`}
 
 
@@ -2484,7 +2539,7 @@ $('script').addEventListener('input',()=>{clearTimeout(scriptTimer);scriptTimer=
 $('story').addEventListener('input',()=>{updateWordCount();clearTimeout(scriptTimer);scriptTimer=setTimeout(saveDraft,600)});
 $('convertBtn').addEventListener('click',()=>{const s=$('story').value.trim();if(!s){toast('Paste a chapter first');return}
   if($('script').value.trim()&&!confirmReplace())return;
-  $('script').value=convert(s,$('optNarr').checked);onScript();CHAP_COUNTS[$('chNum').value||'1']=chapterCounts();store.set('chapCounts',CHAP_COUNTS);renderCast();relayout();T=0;toast(`Converted: ${MSGS.length} lines, ${MSGS.filter(m=>m.unsure).length} guesses to check`)});
+  const isChat=looksLikeChat(s);$('script').value=isChat?convertChat(s,$('optNarr').checked):convert(s,$('optNarr').checked);onScript();if(isChat)toast('Chat-format story detected: using usernames, chats and system lines',4000);CHAP_COUNTS[$('chNum').value||'1']=chapterCounts();store.set('chapCounts',CHAP_COUNTS);renderCast();relayout();T=0;toast(`Converted: ${MSGS.length} lines, ${MSGS.filter(m=>m.unsure).length} guesses to check`)});
 let replaceArmed=0;function confirmReplace(){if(Date.now()-replaceArmed<4000)return true;replaceArmed=Date.now();toast('Click Convert again to replace the current script');return false}
 ['wpm','offset','endPad'].forEach(id=>$(id).addEventListener('input',onScript));
 ['tsize','optNames','optTime'].forEach(id=>$(id).addEventListener('change',()=>{relayout();saveLook()}));
