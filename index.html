@@ -127,6 +127,13 @@ input[type=file]{display:none}
   <div class="card">
     <h2><span class="n">2</span> Narration sync <span class="r" id="syncState">not synced: using reading speed</span></h2>
     <div class="body">
+      <div class="row" style="margin-bottom:10px">
+        <div class="grow"><label class="f">Intro</label><select id="introSrc">
+          <option value="silent">Silent: title card + intro chat play before the narration</option>
+          <option value="inaudio">My narration audio starts with a spoken intro</option></select></div>
+        <div style="width:140px" id="introLenBox"><label class="f">Intro length (sec)</label><input type="number" id="introLen" value="30" min="0" step="0.5"></div>
+      </div>
+      <p class="hint" id="introSrcHint" style="margin:-4px 0 10px"></p>
       <div class="row">
         <div class="drop" id="srtDrop"><b>Subtitles (.srt / .vtt)</b><span id="srtLabel">Drop or click: messages pop up exactly when your voice reads them</span></div>
         <div class="drop" id="audDrop"><b>Narration audio</b><span id="audLabel">Drop or click: mp3, wav, m4a. Baked into the video</span></div>
@@ -209,12 +216,17 @@ input[type=file]{display:none}
     <h2><span class="n">6</span> Export video <span class="r" id="encInfo"></span></h2>
     <div class="body">
       <div class="row">
-        <button class="btn p" id="exportBtn">⬇ Export MP4</button>
-        <button class="btn" id="exportAllBtn" style="display:none">⬇ Export all chapters</button>
-        <button class="btn" id="cancelBtn" style="display:none">Cancel</button>
-        <span class="muted" style="font-size:12px" id="expMsg">Renders faster than real time in Chrome or Edge.</span>
+        <div style="width:200px"><label class="f">Quality</label><select id="qual"><option value="std">Standard · 30 fps</option><option value="small">Smaller file · 24 fps</option></select></div>
       </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn p" id="exportBtn">⬇ Export this chapter</button>
+        <button class="btn" id="exportAllBtn" style="display:none">⬇ All chapters (separate files)</button>
+        <button class="btn" id="exportWholeBtn" style="display:none">⬇ Whole story as one video</button>
+        <button class="btn" id="cancelBtn" style="display:none">Cancel</button>
+      </div>
+      <p class="hint" id="sizeEst"></p>
       <div class="prog"><i id="progBar"></i></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0" id="expMsg">Renders faster than real time in Chrome or Edge. Keep this tab in front while it renders.</p>
     </div>
   </div>
 </div>
@@ -2278,6 +2290,13 @@ function parseSRT(txt){
 const norm=s=>s.toLowerCase().replace(/[’']/g,'').replace(/[^a-z0-9\s]+/g,' ').split(/\s+/).filter(Boolean);
 function lev1(a,b){if(a===b)return true;if(Math.abs(a.length-b.length)>1||a.length<4)return false;let i=0,j=0,e=0;while(i<a.length&&j<b.length){if(a[i]===b[j]){i++;j++}else{if(++e>1)return false;if(a.length>b.length)i++;else if(b.length>a.length)j++;else{i++;j++}}}return e+(a.length-i)+(b.length-j)<=1}
 let alignInfo='';
+function alignToWords(msgs,W,t0d,t1d){const wcs=msgs.map(m=>Math.max(1,norm(m.text).length));const times=new Array(msgs.length).fill(null);let p=0,hit=0;
+  msgs.forEach((m,i)=>{const toks=norm(m.text);if(!toks.length)return;const k=Math.min(5,toks.length);let best=-1,bs=0;const lim=Math.min(W.length,p+600);
+    for(let j=p;j<lim;j++){let s=0;for(let q=0;q<k&&j+q<W.length;q++)if(lev1(W[j+q].w,toks[q]))s++;const sc=s-(j-p)*0.0015;if(s>=Math.max(1,Math.ceil(k*.6))&&sc>bs){bs=sc;best=j;if(s===k)break}}
+    if(best>=0){times[i]=W[best].t;p=best+Math.max(1,Math.floor(toks.length*.7));hit++}});
+  let li=-1;for(let i=0;i<=msgs.length;i++){if(i===msgs.length||times[i]!=null){const a=li>=0?times[li]:t0d,b=i<msgs.length?times[i]:t1d;const span=[];for(let k=li+1;k<i;k++)span.push(k);
+    if(span.length){const tot=span.reduce((s,k)=>s+wcs[k],0)+1;let acc=0;span.forEach(k=>{acc+=wcs[k];times[k]=a+(b-a)*acc/tot})}li=i}}
+  return{times,hit}}
 function computeTimes(msgs){
   const off=parseFloat($('offset').value)||0;
   const wcs=msgs.map(m=>Math.max(1,norm(m.text).length));
@@ -2579,7 +2598,7 @@ function setPreviewSize(){const[W,H]=RES;const max=1280;const s=Math.min(1,max/M
 function pop(){const v=parseFloat($('popVol').value)||0;if(!v)return;try{actx=actx||new(window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain(),n=actx.currentTime;o.type='sine';o.frequency.setValueAtTime(880,n);o.frequency.exponentialRampToValueAtTime(1320,n+.05);g.gain.setValueAtTime(0,n);g.gain.linearRampToValueAtTime(.18*v,n+.008);g.gain.exponentialRampToValueAtTime(.0001,n+.14);o.connect(g);g.connect(actx.destination);o.start(n);o.stop(n+.16)}catch(_){}}
 function tick(now){const dt=Math.min(.1,(now-lastNow)/1000);lastNow=now;
   if(playing){const t0=T;
-    if(audioURL){if(T<PRE){T+=dt;if(T>=PRE){aud.currentTime=CH_OFF;aud.play().catch(()=>{})}}else if(!aud.paused)T=PRE+aud.currentTime-CH_OFF;else T+=dt}else T+=dt;
+    if(audioURL){const as=PRE-LEAD;if(T<as){T+=dt;if(T>=as){aud.currentTime=CH_OFF-LEAD;aud.play().catch(()=>{})}}else if(!aud.paused)T=PRE+aud.currentTime-CH_OFF;else T+=dt}else T+=dt;
     if(T>=duration){T=duration;playing=false;aud.pause();$('playBtn').textContent='▶ Play'}
     const a=lastIdx(t0-PRE),b=lastIdx(T-PRE);if(b>a&&b-a<4)for(let k=a+1;k<=b;k++)if(MSGS[k].kind==='b')pop()}
   performanceT=T;
@@ -2587,10 +2606,10 @@ function tick(now){const dt=Math.min(.1,(now-lastNow)/1000);lastNow=now;
   updTime();requestAnimationFrame(tick)}
 function updTime(){$('time').textContent=`${fmt(T)} / ${fmt(duration)}`;if(!seeking)$('seek').value=Math.round(T/duration*1000)}
 let seeking=false;
-$('seek').addEventListener('input',()=>{seeking=true;T=$('seek').value/1000*duration;if(audioURL){aud.currentTime=CH_OFF+clamp(T-PRE,0,CH_LEN||1e9);if(T<PRE)aud.pause();else if(playing)aud.play().catch(()=>{})}});
+$('seek').addEventListener('input',()=>{seeking=true;T=$('seek').value/1000*duration;if(audioURL){aud.currentTime=CH_OFF+clamp(T-PRE,-LEAD,CH_LEN||1e9);if(T<PRE-LEAD)aud.pause();else if(playing)aud.play().catch(()=>{})}});
 $('seek').addEventListener('change',()=>{seeking=false});
 $('playBtn').addEventListener('click',()=>{if(T>=duration-.05)T=0;playing=!playing;$('playBtn').textContent=playing?'❚❚ Pause':'▶ Play';
-  if(audioURL){if(playing&&T>=PRE){aud.currentTime=CH_OFF+clamp(T-PRE,0,CH_LEN);aud.play().catch(()=>{})}else aud.pause()}});
+  if(audioURL){if(playing&&T>=PRE-LEAD){aud.currentTime=CH_OFF+clamp(T-PRE,-LEAD,CH_LEN);aud.play().catch(()=>{})}else aud.pause()}});
 
 /* ================= wiring ================= */
 function updateWordCount(){const n=($('story').value.match(/\S+/g)||[]).length;$('wordCount').textContent=n?`${n.toLocaleString()} words`:''}
@@ -2598,6 +2617,17 @@ let scriptTimer=null;
 let TITLE_DUR=0;
 function introChatName(){const s=$('storyName').value.trim();return s.replace(/\s*\([^)]*\)\s*$/,'')||$('chTitle').value||'Chat'}
 function buildIntro(){
+  if(LEAD>0){ // the intro is spoken at the start of the narration: show it while it plays
+    TITLE_DUR=$('optIntro').checked?Math.min(3.6,Math.max(1.5,LEAD*.3)):0;
+    const src=$('introMsg').value.trim();if(!src||!$('optIntro').checked)return{msgs:[],dur:LEAD};
+    const im=parseScript(convertChat(src,true)).filter(m=>m.kind!=='c');if(!im.length)return{msgs:[],dur:LEAD};
+    const chat=introChatName();const w0=CH_OFF-LEAD,w1=CH_OFF;let ts;
+    if(CUES&&CUES.length){const W=wordStream().filter(x=>x.t>=w0-.3&&x.t<w1);ts=alignToWords(im,W,w0+TITLE_DUR*.5,w1-.6).times}
+    else{const wc=im.map(m=>m.kind==='t'?0:Math.max(1,(m.text.match(/\S+/g)||[]).length));const tot=wc.reduce((a,b)=>a+b,0)||1;let acc=0;ts=im.map((m,k)=>{const v=w0+.4+(LEAD-1)*acc/tot;acc+=wc[k];return v})}
+    im.forEach((m,k)=>{m.chat=chat;m.ln=-1;m.intro=true;m.t=Math.min(-.3,(ts[k]==null?w0:ts[k])-CH_OFF)});
+    const lt=im[im.length-1];if(lt.kind==='t')lt.t=Math.max(lt.t,-Math.min(2.6,LEAD*.15));
+    for(let k=1;k<im.length;k++)if(im[k].t<im[k-1].t+.05)im[k].t=im[k-1].t+.05;
+    return{msgs:im,dur:LEAD}}
   TITLE_DUR=$('optIntro').checked?3.6:0;if(!TITLE_DUR)return{msgs:[],dur:0};
   const src=$('introMsg').value.trim();const ch=parseInt($('chNum').value)||1;
   if(!src||(!$('introAll').checked&&ch!==1))return{msgs:[],dur:0};
@@ -2608,7 +2638,10 @@ function buildIntro(){
   im.forEach(m=>{m.t-=dur});return{msgs:im,dur};
 }
 function onScript(){setChapterWindow();MSGS=parseScript($('script').value);computeTimes(MSGS);
-  const intro=buildIntro();MSGS=intro.msgs.concat(MSGS);PRE=TITLE_DUR+intro.dur;renderCast();relayout();
+  // own subtitles for one chapter that begins with a spoken intro: chapter starts at its first matched line
+  if(introInAudio()&&chapterHasIntro()&&CUES&&!FULL&&!AUTO_SRT){const f=MSGS.find(m=>m.kind!=='c');const lead=f?Math.max(0,f.t-.3):0;
+    if(lead>1){LEAD=lead;CH_OFF=lead;CH_LEN=Math.max(1,(SRC?SRC.duration:CUES[CUES.length-1].b)-lead);MSGS.forEach(m=>{m.t=Math.max(0,m.t-lead)})}}
+  const intro=buildIntro();MSGS=intro.msgs.concat(MSGS);PRE=LEAD>0?LEAD:TITLE_DUR+intro.dur;renderCast();relayout();
   const unsure=MSGS.filter(m=>m.unsure).length;$('unsure').style.display=unsure?'':'none';$('unsure').textContent=`${unsure} guessed`;
   $('msgCount').textContent=`${MSGS.length} lines · ${fmt(duration)}`;
   $('syncState').textContent=FULL?`whole-story narration · ${alignInfo}`:CUES?`synced to subtitles · ${alignInfo}`:(SRC?`audio only: ${alignInfo}`:'not synced: using reading speed');
@@ -2618,12 +2651,13 @@ function onScript(){setChapterWindow();MSGS=parseScript($('script').value);compu
   else if(SRC&&!CUES&&SRC.duration>1200){fi.style.display='';fi.style.color='var(--warn)';fi.innerHTML=`<b>⚠ Not synced yet.</b> Your audio is ${fmt(SRC.duration)} long. Click <b>✨ Auto-sync without subtitles</b> (about a minute), or load its matching .srt file.`}
   else if(SRC&&CUES&&CHAPTERS.length>1&&!FULL&&SRC.duration>1200){fi.style.display='';fi.style.color='var(--warn)';fi.innerHTML=`<b>⚠ Couldn't find the chapters in these subtitles.</b> Check that the .srt belongs to this audio and this story.`}
   else fi.style.display='none';
-  $('exportAllBtn').style.display=CHAPTERS.length>1?'':'none';
+  $('exportAllBtn').style.display=CHAPTERS.length>1?'':'none';$('exportWholeBtn').style.display=CHAPTERS.length>1?'':'none';updSizeEst();
   $('autoSyncBtn').style.display=SRC&&(!CUES||AUTO_SRT)&&$('story').value.trim()?'':'none';$('autoSyncBtn').textContent=AUTO_SRT?'↻ Re-run auto-sync':'✨ Auto-sync without subtitles';
   saveDraft()}
 function saveDraft(){const ok=store.set('draft',{story:$('story').value,script:$('script').value,title:$('chTitle').value,num:$('chNum').value});$('saveState').textContent=ok?'Saved in this browser':'Too big to auto-save'}
-$('script').addEventListener('input',()=>{clearTimeout(scriptTimer);scriptTimer=setTimeout(onScript,350)});
-let chapTimer=null;$('story').addEventListener('input',()=>{updateWordCount();clearTimeout(chapTimer);chapTimer=setTimeout(()=>{refreshChapters();saveDraft()},500)});
+let SCRIPT_EDITS={};const chIdx=()=>CHAPTERS.length>1?(parseInt($('chapSel').value)||0):0;
+$('script').addEventListener('input',()=>{if(CHAPTERS.length>1)SCRIPT_EDITS[chIdx()]=$('script').value;clearTimeout(scriptTimer);scriptTimer=setTimeout(onScript,350)});
+let chapTimer=null;$('story').addEventListener('input',()=>{SCRIPT_EDITS={};updateWordCount();clearTimeout(chapTimer);chapTimer=setTimeout(()=>{refreshChapters();saveDraft()},500)});
 let CHAPTERS=[],ALLCOUNTS=null,STORY_IS_CHAT=false;
 function splitChapters(text){const t=text.replace(/\r/g,'');let parts=t.split(/\bChapter Text\b/);if(parts.length<2)parts=t.split(/^\s*Chapter\s+\d+\s*(?::[^\n]*)?\s*$/m);
   return parts.map(s=>s.trim()).filter(s=>s.replace(/\s+/g,'').length>30)}
@@ -2636,8 +2670,9 @@ function chapterText(){return CHAPTERS.length>1?CHAPTERS[parseInt($('chapSel').v
 function clearNarration(){CUES=null;AUTO_SRT=false;$('saveSrtBtn').style.display='none';audioBuf=null;audioDur=0;SRC=null;FULL=null;aud.pause();if(audioURL){URL.revokeObjectURL(audioURL);audioURL=null;aud.removeAttribute('src');aud.load()}
   $('srtDrop').classList.remove('done');$('audDrop').classList.remove('done');$('srtLabel').textContent='Drop or click: messages pop up exactly when your voice reads them';$('audLabel').textContent='Drop or click: mp3, wav, m4a. Baked into the video'}
 function pickChapter(i){i=clamp(i,0,CHAPTERS.length-1);$('chapSel').value=String(i);$('chNum').value=i+1;if(/^Chapter \d*$/.test($('chTitle').value)||!$('chTitle').value)$('chTitle').value='Chapter '+(i+1);
-  if(FULL){doConvert();return}
-  const had=!!(CUES||audioURL);clearNarration();doConvert();if(had)toast(`Chapter ${i+1} loaded. Add this chapter's subtitles and audio.`,4500)}
+  const load=()=>{if(SCRIPT_EDITS[i]!=null){$('script').value=SCRIPT_EDITS[i];onScript()}else doConvert()};
+  if(FULL){load();return}
+  const had=!!(CUES||audioURL);clearNarration();load();if(had)toast(`Chapter ${i+1} loaded. Add this chapter's subtitles and audio.`,4500)}
 $('chapSel').addEventListener('change',()=>pickChapter(parseInt($('chapSel').value)));
 $('chapPrev').addEventListener('click',()=>pickChapter((parseInt($('chapSel').value)||0)-1));
 $('chapNext').addEventListener('click',()=>pickChapter((parseInt($('chapSel').value)||0)+1));
@@ -2646,10 +2681,10 @@ function doConvert(){const s=chapterText();if(!s){toast('Paste a chapter first')
   $('script').value=isChat?convertChat(s,$('optNarr').checked,ALLCOUNTS):convert(s,$('optNarr').checked);onScript();
   CHAP_COUNTS[$('chNum').value||'1']=chapterCounts();store.set('chapCounts',CHAP_COUNTS);renderCast();relayout();T=0;
   const fx=isChat&&convertChat.fixes.length?` · fixed ${convertChat.fixes.length} username typo${convertChat.fixes.length>1?'s':''} (${convertChat.fixes.slice(0,4).join(', ')}${convertChat.fixes.length>4?'…':''})`:'';
-  toast(isChat?`Chapter ${$('chNum').value}: ${MSGS.length} lines from the chat story${fx}`:`Converted: ${MSGS.length} lines, ${MSGS.filter(m=>m.unsure).length} guesses to check`,4500);return true}
+  if(exporting)return true;toast(isChat?`Chapter ${$('chNum').value}: ${MSGS.length} lines from the chat story${fx}`:`Converted: ${MSGS.length} lines, ${MSGS.filter(m=>m.unsure).length} guesses to check`,4500);return true}
 $('convertBtn').addEventListener('click',()=>{if(!chapterText()){toast('Paste a chapter first');return}
   if($('script').value.trim()&&!confirmReplace())return;
-  doConvert()});
+  delete SCRIPT_EDITS[chIdx()];doConvert()});
 let replaceArmed=0;function confirmReplace(){if(Date.now()-replaceArmed<4000)return true;replaceArmed=Date.now();toast('Click Convert again to replace the current script');return false}
 ['wpm','offset','endPad'].forEach(id=>$(id).addEventListener('input',onScript));
 ['tsize','optNames','optTime'].forEach(id=>$(id).addEventListener('change',()=>{relayout();saveLook()}));
@@ -2657,6 +2692,10 @@ $('optIntro').addEventListener('change',()=>{onScript();saveLook()});
 let introTimer=null;function saveIntro(){store.set('storyName',$('storyName').value);store.set('author',$('author').value);store.set('introMsg',$('introMsg').value);store.set('introAll',$('introAll').checked)}
 ['storyName','author','introMsg'].forEach(id=>$(id).addEventListener('input',()=>{clearTimeout(introTimer);introTimer=setTimeout(()=>{saveIntro();onScript()},300)}));
 $('introAll').addEventListener('change',()=>{saveIntro();onScript()});
+function syncIntroSrc(){const ia=introInAudio();$('introLenBox').style.display=ia?'':'none';
+  $('introSrcHint').innerHTML=ia?'Put the exact words of the spoken intro in <b>Intro chat</b> (step 1), then Auto-sync or load subtitles: the tool finds where chapter 1 begins and plays the title card and intro chat in time with your voice. Without sync it uses <b>Intro length</b>.':'The title card and intro chat play first, then your narration starts.'}
+$('introSrc').addEventListener('change',()=>{store.set('introSrc',$('introSrc').value);syncIntroSrc();if(CUES)detectFull();onScript()});
+$('introLen').addEventListener('input',()=>{store.set('introLen',$('introLen').value);onScript()});
 $('meSel').addEventListener('change',()=>{ME_MODE=$('meSel').value;store.set('meMode',ME_MODE);renderCast();relayout()});
 function buildSwatches(){const box=$('themes');box.innerHTML='';Object.entries(THEMES).forEach(([k,th])=>{const b=document.createElement('button');b.className='sw'+(k===CUR_THEME?' on':'');b.type='button';
   const c=document.createElement('canvas');c.width=192;c.height=108;const x=c.getContext('2d');const save=CUR_THEME;CUR_THEME=k;x.drawImage(buildBg(192,108),0,0);CUR_THEME=save;
@@ -2666,6 +2705,7 @@ function buildSwatches(){const box=$('themes');box.innerHTML='';Object.entries(T
   b.appendChild(c);const s=document.createElement('span');s.textContent=th.name;b.appendChild(s);
   b.addEventListener('click',()=>{CUR_THEME=k;bgCache=null;[...box.children].forEach(x=>x.classList.remove('on'));b.classList.add('on');relayout();saveLook()});box.appendChild(b)})}
 ['optTyping','popVol','optNarr'].forEach(id=>$(id).addEventListener('change',saveLook));
+$('qual').addEventListener('change',()=>{store.set('qual',$('qual').value);updSizeEst()});
 $('res').addEventListener('change',()=>{RES=$('res').value.split('x').map(Number);setPreviewSize();relayout();saveLook()});
 $('chTitle').addEventListener('input',saveDraft);$('chNum').addEventListener('input',()=>{const v=$('chNum').value;if(/^Chapter \d*$/.test($('chTitle').value))$('chTitle').value='Chapter '+v;saveDraft();onScript()});
 function saveLook(){store.set('look',{res:$('res').value,theme:CUR_THEME,time:$('optTime').checked,intro:$('optIntro').checked,tsize:$('tsize').value,popVol:$('popVol').value,typing:$('optTyping').checked,names:$('optNames').checked,narr:$('optNarr').checked,wpm:$('wpm').value})}
@@ -2764,12 +2804,17 @@ function detectFull(){
     const ta=a>=0?starts[a]:0,tb=b<n?starts[b]:end;let sa=0,si=0;for(let k=Math.max(a,0);k<b;k++){if(k<i&&k>=Math.max(a,0))si+=tok[k];sa+=tok[k]}
     starts[i]=ta+(tb-ta)*(a<0&&i===0?0:si/(sa||1))}
   for(let i=0;i<n;i++){starts[i]=Math.max(0,starts[i]-.25);if(i&&starts[i]<starts[i-1]+1)starts[i]=starts[i-1]+1}
-  starts[0]=Math.min(starts[0],Math.max(0,CUES[0].a-.25));
+  if(!introInAudio())starts[0]=Math.min(starts[0],Math.max(0,CUES[0].a-.25));
   const ends=starts.map((s,i)=>i<n-1?starts[i+1]:end);
   FULL={starts,ends,found,n};
 }
-function setChapterWindow(){const i=CHAPTERS.length>1?(parseInt($('chapSel').value)||0):0;
-  if(FULL){CH_OFF=FULL.starts[i];CH_LEN=FULL.ends[i]-CH_OFF}else{CH_OFF=0;CH_LEN=SRC?SRC.duration:0}}
+const introInAudio=()=>$('introSrc').value==='inaudio';
+function chapterHasIntro(){const ch=parseInt($('chNum').value)||1;return $('introAll').checked||ch===1}
+function setChapterWindow(){const i=CHAPTERS.length>1?(parseInt($('chapSel').value)||0):0;LEAD=0;
+  if(FULL){CH_OFF=FULL.starts[i];CH_LEN=FULL.ends[i]-CH_OFF;if(i===0&&introInAudio()&&CH_OFF>1)LEAD=CH_OFF}
+  else{CH_OFF=0;CH_LEN=SRC?SRC.duration:0;
+    if(introInAudio()&&chapterHasIntro()&&SRC&&!CUES){const l=clamp(parseFloat($('introLen').value)||0,0,Math.max(0,CH_LEN-1));if(l>0){LEAD=l;CH_OFF=l;CH_LEN-=l}}}}
+let LEAD=0;
 
 /* ================= auto-sync without subtitles: story text + pauses in the audio ================= */
 let syncBusy=false,cancelSync=false;
@@ -2813,7 +2858,7 @@ async function autoSync(){
     fi.innerHTML='<b>Listening for pauses in your audio…</b> 0%';
     const pauses=await detectPauses(p=>{fi.innerHTML=`<b>Listening for pauses in your audio…</b> ${Math.round(p*100)}%`});
     fi.innerHTML='<b>Matching every line of the story to the audio…</b>';await new Promise(r=>setTimeout(r,30));
-    const units=storyUnits(text);const times=alignUnits(units,pauses,SRC.duration);
+    const units=(introInAudio()&&$('introMsg').value.trim()?storyUnits($('introMsg').value):[]).concat(storyUnits(text));const times=alignUnits(units,pauses,SRC.duration);
     CUES=units.map((u,i)=>({a:times[i],b:Math.max(times[i]+.2,times[i+1]-.3),t:u}));AUTO_SRT=true;
     $('srtDrop').classList.add('done');$('srtLabel').textContent=`Auto-timed from your story: ${units.length.toLocaleString()} lines`;
     $('saveSrtBtn').style.display='';detectFull();onScript();
@@ -2830,71 +2875,93 @@ let downloads=null;try{if(window.claude&&typeof window.claude.use==='function')w
 async function saveFile(blob,name){
   if(downloads){try{await downloads.save({filename:name,data:blob});return'saved'}catch(e){if(e&&e.code==='declined')return'declined';if(e&&e.code==='too_large'){toast('File too large to save here. Try 1280×720.');return'fail'}}}
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},60000);return'saved'}
-async function mixAudio(dur){
-  const sr=48000,vol=parseFloat($('popVol').value)||0;if(!SRC&&!vol)return null;
-  const oc=new OfflineAudioContext(2,Math.ceil(dur*sr),sr);
-  if(SRC){$('expMsg').textContent='Cutting this chapter\'s narration…';const seg=await SRC.getSegment(CH_OFF,CH_OFF+Math.max(.1,Math.min(CH_LEN,dur-PRE)));const s=oc.createBufferSource();s.buffer=seg;s.connect(oc.destination);s.start(PRE)}
-  if(vol){MSGS.forEach(m=>{if(m.kind!=='b'||m.t+PRE>dur-.2)return;const o=oc.createOscillator(),g=oc.createGain(),n=m.t+PRE;o.type='sine';o.frequency.setValueAtTime(880,n);o.frequency.exponentialRampToValueAtTime(1320,n+.05);g.gain.setValueAtTime(0,n);g.gain.linearRampToValueAtTime(.18*vol,n+.008);g.gain.exponentialRampToValueAtTime(.0001,n+.14);o.connect(g);g.connect(oc.destination);o.start(n);o.stop(n+.16)})}
-  return await oc.startRendering()}
-async function pickVideoCodec(W,H,fps){
-  const br=Math.round(W*H*fps*.09);
+/* ---------- streamed export: written in pieces, audio mixed in 10-second blocks, so multi-hour videos fit ---------- */
+function bitrateFor(W,H,fps){return Math.round(W*H*fps*($('qual').value==='small'?.016:.028))}
+class PartStore{constructor(){this.segs=[];this.end=0}
+  write(data,pos){const len=data.byteLength,e=pos+len,b=new Blob([data.slice?data.slice():data]);
+    if(pos===this.end){this.segs.push({p:pos,e,b});this.end=e;return}
+    const out=[];for(const s of this.segs){if(s.e<=pos||s.p>=e){out.push(s);continue}if(s.p<pos)out.push({p:s.p,e:pos,b:s.b.slice(0,pos-s.p)});if(s.e>e)out.push({p:e,e:s.e,b:s.b.slice(e-s.p)})}
+    out.push({p:pos,e,b});out.sort((x,y)=>x.p-y.p);this.segs=out;this.end=Math.max(this.end,e)}
+  blob(){const parts=[];let cur=0;for(const s of this.segs){if(s.p>cur)parts.push(new Uint8Array(s.p-cur));parts.push(s.b);cur=s.e}return new Blob(parts,{type:'video/mp4'})}}
+async function pickVideoCodec(W,H,fps){const br=bitrateFor(W,H,fps);
   const tries=[['avc','avc1.640033'],['avc','avc1.640028'],['avc','avc1.4d0033'],['avc','avc1.42003e'],['vp9','vp09.00.41.08'],['av1','av01.0.08M.08']];
-  for(const[k,c]of tries){try{const cfg={codec:c,width:W,height:H,bitrate:br,framerate:fps};if(k==='avc')cfg.avc={format:'avc'};const r=await VideoEncoder.isConfigSupported(cfg);if(r.supported)return{kind:k,cfg}}catch(_){}}
+  for(const[k,c]of tries){for(const hw of['no-preference','prefer-software']){try{const cfg={codec:c,width:W,height:H,bitrate:br,framerate:fps,bitrateMode:'variable',hardwareAcceleration:hw};if(k==='avc')cfg.avc={format:'avc'};const r=await VideoEncoder.isConfigSupported(cfg);if(r.supported)return{kind:k,cfg}}catch(_){}}}
   return null}
-async function pickAudioCodec(){for(const[k,c]of[['aac','mp4a.40.2'],['opus','opus']]){try{const r=await AudioEncoder.isConfigSupported({codec:c,sampleRate:48000,numberOfChannels:2,bitrate:160000});if(r.supported)return{kind:k,cfg:{codec:c,sampleRate:48000,numberOfChannels:2,bitrate:160000}}}catch(_){}}return null}
-let exportingAll=false;
-$('exportBtn').addEventListener('click',()=>exportCurrent());
-$('exportAllBtn').addEventListener('click',async()=>{if(CHAPTERS.length<2||exportingAll)return;exportingAll=true;cancelExport=false;$('exportAllBtn').disabled=true;
-  const startAt=parseInt($('chapSel').value)||0;let done=0;
-  try{for(let i=startAt;i<CHAPTERS.length;i++){pickChapter(i);await new Promise(r=>setTimeout(r,80));$('encInfo').textContent=`chapter ${i+1} of ${CHAPTERS.length}`;
-    const r=await exportCurrent(true);if(r!=='saved')break;done++}}
-  finally{exportingAll=false;$('exportAllBtn').disabled=false;$('expMsg').textContent=`Exported ${done} chapter${done===1?'':'s'}.`}});
-async function exportCurrent(batch){
-  if(!MSGS.length){toast('Nothing to export yet: convert a chapter first');return'fail'}
-  if(!('VideoEncoder' in window)){toast('Export needs Chrome or Edge (desktop).',5000);return'fail'}
-  try{await document.fonts.ready}catch(_){}
-  playing=false;aud.pause();$('playBtn').textContent='▶ Play';
-  const[W,H]=RES,fps=30;const dur=calcDuration();const N=Math.ceil(dur*fps);
-  const vc=await pickVideoCodec(W,H,fps);if(!vc){toast('This browser can\'t encode video. Try Chrome or Edge.',5000);return'fail'}
-  const mixed=await mixAudio(dur);const ac=mixed?await pickAudioCodec():null;
-  if(mixed&&!ac)toast('This browser can\'t encode audio, so the video will be silent.',5000);
-  $('exportBtn').disabled=true;$('cancelBtn').style.display='';if(!batch)cancelExport=false;let result='fail';
-  $('encInfo').textContent=`${W}×${H} · ${vc.kind.toUpperCase()}${ac?' + '+ac.kind.toUpperCase():''}`;
-  const muxer=new Mp4Muxer.Muxer({target:new Mp4Muxer.ArrayBufferTarget(),video:{codec:vc.kind,width:W,height:H,frameRate:fps},audio:ac?{codec:ac.kind,numberOfChannels:2,sampleRate:48000}:undefined,fastStart:'in-memory',firstTimestampBehavior:'offset'});
-  let encErr=null;
-  const venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>encErr=e});venc.configure(vc.cfg);
-  let aenc=null;
-  try{
-    if(ac){aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>encErr=e});aenc.configure(ac.cfg);
-      const L0=mixed.getChannelData(0),R0=mixed.numberOfChannels>1?mixed.getChannelData(1):L0;const CH=4800;
-      for(let s=0;s<mixed.length;s+=CH){const n=Math.min(CH,mixed.length-s);const buf=new Float32Array(n*2);buf.set(L0.subarray(s,s+n),0);buf.set(R0.subarray(s,s+n),n);
-        const ad=new AudioData({format:'f32-planar',sampleRate:48000,numberOfFrames:n,numberOfChannels:2,timestamp:Math.round(s/48000*1e6),data:buf});aenc.encode(ad);ad.close();
-        if(aenc.encodeQueueSize>40)await new Promise(r=>setTimeout(r,0))}
-      await aenc.flush()}
-    const oc=typeof OffscreenCanvas!=='undefined'?new OffscreenCanvas(W,H):Object.assign(document.createElement('canvas'),{width:W,height:H});
-    const octx=oc.getContext('2d');const saveL=L;L=layout(W,H);
-    const t0=performance.now();
-    for(let f=0;f<N;f++){
-      if(cancelExport||encErr)break;
-      const t=f/fps;performanceT=t;drawFrame(octx,t);
-      const vf=new VideoFrame(oc,{timestamp:Math.round(f*1e6/fps),duration:Math.round(1e6/fps)});venc.encode(vf,{keyFrame:f%(fps*2)===0});vf.close();
-      while(venc.encodeQueueSize>6)await new Promise(r=>setTimeout(r,1));
-      if(f%15===0){const p=f/N;$('progBar').style.width=(p*100).toFixed(1)+'%';const el=(performance.now()-t0)/1000;const eta=p>0.01?el/p-el:0;
-        $('expMsg').textContent=`Rendering ${fmt(t)} / ${fmt(dur)}${p>0.01?` · about ${fmt(eta)} left`:''}`;await new Promise(r=>setTimeout(r,0))}
-    }
-    L=saveL;
-    if(encErr)throw encErr;
-    if(cancelExport){$('expMsg').textContent='Export cancelled.';return'cancel'}
-    $('expMsg').textContent='Finishing file…';await venc.flush();muxer.finalize();
-    const blob=new Blob([muxer.target.buffer],{type:'video/mp4'});
-    const name=`Chapter ${String($('chNum').value||1).padStart(2,'0')} - ${($('chTitle').value||'Chat').replace(/[\\/:*?"<>|]+/g,'').slice(0,80)}.mp4`;
-    $('progBar').style.width='100%';
-    const r=await saveFile(blob,name);result=r;
-    $('expMsg').textContent=r==='saved'?`Done: ${name} (${(blob.size/1048576).toFixed(1)} MB)`:r==='declined'?'Save cancelled. Click Export to try again.':'Couldn\'t save the file.';
+async function pickAudioCodec(){for(const[k,c]of[['aac','mp4a.40.2'],['opus','opus']]){try{const cfg={codec:c,sampleRate:48000,numberOfChannels:2,bitrate:160000};const r=await AudioEncoder.isConfigSupported(cfg);if(r.supported)return{kind:k,cfg}}catch(_){}}return null}
+async function openSession(withAudio){
+  const[W,H]=RES,fps=$('qual').value==='small'?24:30;
+  const vc=await pickVideoCodec(W,H,fps);if(!vc){toast('This browser can\'t encode video. Try Chrome or Edge on a computer.',6000);return null}
+  const wantAudio=withAudio||(parseFloat($('popVol').value)||0)>0;const ac=wantAudio?await pickAudioCodec():null;
+  if(withAudio&&!ac)toast('This browser can\'t encode audio, so the video will be silent.',6000);
+  const st=new PartStore();
+  const muxer=new Mp4Muxer.Muxer({target:new Mp4Muxer.StreamTarget({onData:(d,p)=>st.write(d,p),chunked:true,chunkSize:1<<23}),video:{codec:vc.kind,width:W,height:H,frameRate:fps},audio:ac?{codec:ac.kind,numberOfChannels:2,sampleRate:48000}:undefined,fastStart:false,firstTimestampBehavior:'offset'});
+  const S={W,H,fps,vc,ac,st,muxer,err:null,frames:0,aDone:0,tOff:0};
+  S.venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>S.err=e});S.venc.configure(vc.cfg);
+  if(ac){S.aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>S.err=e});S.aenc.configure(ac.cfg)}
+  S.canvas=typeof OffscreenCanvas!=='undefined'?new OffscreenCanvas(W,H):Object.assign(document.createElement('canvas'),{width:W,height:H});S.ctx=S.canvas.getContext('2d');
+  $('encInfo').textContent=`${W}×${H} · ${fps} fps · ${vc.kind.toUpperCase()}${ac?' + '+ac.kind.toUpperCase():''}`;return S}
+function closeSession(S){try{S.venc.state!=='closed'&&S.venc.close()}catch(_){}try{S.aenc&&S.aenc.state!=='closed'&&S.aenc.close()}catch(_){}}
+async function finishSession(S){$('expMsg').textContent='Finishing file…';await S.venc.flush();if(S.aenc)await S.aenc.flush();S.muxer.finalize();$('progBar').style.width='100%';return S.st.blob()}
+/* audio for one block of the current chapter (times are video times within the chapter) */
+async function chapterAudio(t0,t1,n){
+  const sr=48000,vol=parseFloat($('popVol').value)||0;const oc=new OfflineAudioContext(2,n,sr);let any=false;
+  if(SRC){const s0=CH_OFF+(t0-PRE),s1=CH_OFF+(t1-PRE);const a=Math.max(CH_OFF-LEAD,s0,0),b=Math.min(CH_OFF+CH_LEN,s1,SRC.duration);
+    if(b>a+.005){const pad=.12,pa=Math.max(0,a-pad),seg=await SRC.getSegment(pa,Math.min(SRC.duration,b+pad));const s=oc.createBufferSource();s.buffer=seg;s.connect(oc.destination);s.start(a-s0,a-pa,b-a);any=true}}
+  if(vol)MSGS.forEach(m=>{if(m.kind!=='b')return;const at=PRE+m.t;if(at<t0||at>=t1-.16)return;const n0=at-t0,o=oc.createOscillator(),g=oc.createGain();o.type='sine';o.frequency.setValueAtTime(880,n0);o.frequency.exponentialRampToValueAtTime(1320,n0+.05);g.gain.setValueAtTime(0,n0);g.gain.linearRampToValueAtTime(.18*vol,n0+.008);g.gain.exponentialRampToValueAtTime(.0001,n0+.14);o.connect(g);g.connect(oc.destination);o.start(n0);o.stop(n0+.16);any=true});
+  return any?await oc.startRendering():null}
+/* render the chapter that is currently loaded into the session, after whatever is already in it */
+async function renderChapter(S,label){
+  const{W,H,fps}=S;const dur=calcDuration(),N=Math.ceil(dur*fps),dv=N/fps,BLOCK=10;const saveL=L;L=layout(W,H);const t0=performance.now();
+  try{for(let f=0;f<N;f++){
+      if(cancelExport||S.err)break;
+      if(S.aenc&&f%(BLOCK*fps)===0){const bs=f/fps,be=Math.min(dv,bs+BLOCK),target=Math.round((S.tOff+be)*48000),n=target-S.aDone;
+        if(n>0){const buf=await chapterAudio(bs,be,n);const L0=buf?buf.getChannelData(0):null,R0=buf?(buf.numberOfChannels>1?buf.getChannelData(1):L0):null;
+          for(let s=0;s<n;s+=4800){const m=Math.min(4800,n-s),ch=new Float32Array(m*2);if(buf){ch.set(L0.subarray(s,s+m),0);ch.set(R0.subarray(s,s+m),m)}
+            const ad=new AudioData({format:'f32-planar',sampleRate:48000,numberOfFrames:m,numberOfChannels:2,timestamp:Math.round((S.aDone+s)/48000*1e6),data:ch});S.aenc.encode(ad);ad.close()}
+          S.aDone=target}}
+      const t=f/fps;performanceT=t;drawFrame(S.ctx,t);
+      const vf=new VideoFrame(S.canvas,{timestamp:Math.round(S.frames*1e6/fps),duration:Math.round(1e6/fps)});S.venc.encode(vf,{keyFrame:S.frames%(fps*2)===0});vf.close();S.frames++;
+      while(S.venc.encodeQueueSize>8)await new Promise(r=>setTimeout(r,1));
+      if(f%20===0){const p=f/N,el=(performance.now()-t0)/1000,eta=p>.01?el/p-el:0;$('progBar').style.width=(S.total?((S.tOff+t)/S.total*100):(p*100)).toFixed(2)+'%';
+        $('expMsg').textContent=`${label?label+' · ':''}${fmt(t)} / ${fmt(dur)}${p>.01?` · about ${fmt(eta)} left${S.total?' for this chapter':''}`:''}`;await new Promise(r=>setTimeout(r,0))}}}
+  finally{L=saveL}
+  S.tOff+=dv;if(S.err)throw S.err;return!cancelExport}
+const safeName=s=>s.replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,' ').trim().slice(0,80)||'video';
+let exporting=false,exportingAll=false;
+function exportStart(){if(exporting)return false;if(!MSGS.length){toast('Nothing to export yet: convert a chapter first');return false}
+  if(!('VideoEncoder' in window)){toast('Export needs Chrome or Edge on a computer.',6000);return false}
+  exporting=true;cancelExport=false;playing=false;aud.pause();$('playBtn').textContent='▶ Play';['exportBtn','exportAllBtn','exportWholeBtn'].forEach(id=>$(id).disabled=true);$('cancelBtn').style.display='';return true}
+function exportEnd(){exporting=false;['exportBtn','exportAllBtn','exportWholeBtn'].forEach(id=>$(id).disabled=false);$('cancelBtn').style.display='none';relayout()}
+async function exportCurrent(){let S=null,result='fail';
+  try{try{await document.fonts.ready}catch(_){}
+    S=await openSession(!!SRC);if(!S)return'fail';
+    const ok=await renderChapter(S,exportingAll?`Chapter ${$('chNum').value} of ${CHAPTERS.length}`:'');
+    if(!ok){$('expMsg').textContent='Export cancelled.';return'cancel'}
+    const blob=await finishSession(S);const name=`Chapter ${String($('chNum').value||1).padStart(2,'0')} - ${safeName($('chTitle').value||'Chat')}.mp4`;
+    result=await saveFile(blob,name);$('expMsg').textContent=result==='saved'?`Done: ${name} (${(blob.size/1048576).toFixed(1)} MB)`:result==='declined'?'Save cancelled. Click Export to try again.':'Couldn\'t save the file.';
   }catch(e){console.error(e);$('expMsg').textContent='Export failed: '+(e&&e.message?e.message:e)}
-  finally{try{venc.state!=='closed'&&venc.close()}catch(_){}try{aenc&&aenc.state!=='closed'&&aenc.close()}catch(_){}
-    $('exportBtn').disabled=false;$('cancelBtn').style.display=exportingAll?'':'none';relayout()}
-  return result}
+  finally{if(S)closeSession(S)}return result}
+$('exportBtn').addEventListener('click',async()=>{if(!exportStart())return;try{await exportCurrent()}finally{exportEnd()}});
+$('exportAllBtn').addEventListener('click',async()=>{if(CHAPTERS.length<2||!exportStart())return;exportingAll=true;const startAt=parseInt($('chapSel').value)||0;let done=0;
+  try{for(let i=startAt;i<CHAPTERS.length;i++){pickChapter(i);await new Promise(r=>setTimeout(r,80));const r=await exportCurrent();if(r!=='saved')break;done++}}
+  finally{exportingAll=false;exportEnd();$('expMsg').textContent=`Exported ${done} chapter${done===1?'':'s'}.`}});
+$('exportWholeBtn').addEventListener('click',async()=>{
+  if(CHAPTERS.length<2){toast('Paste the whole story first: this joins all its chapters into one video.');return}
+  if(SRC&&!FULL){toast('For one video of the whole story, load one narration for the whole story and click ✨ Auto-sync (or load its .srt).',7000);return}
+  if(!exportStart())return;let S=null;const back=parseInt($('chapSel').value)||0;
+  try{try{await document.fonts.ready}catch(_){}
+    S=await openSession(!!SRC);if(!S)return;
+    let total=0;for(let i=0;i<CHAPTERS.length;i++){pickChapter(i);total+=Math.ceil(calcDuration()*S.fps)/S.fps}S.total=total;
+    for(let i=0;i<CHAPTERS.length;i++){pickChapter(i);await new Promise(r=>setTimeout(r,40));const ok=await renderChapter(S,`Chapter ${i+1} of ${CHAPTERS.length} · ${fmt(S.tOff)} / ${fmt(total)} overall`);if(!ok){$('expMsg').textContent='Export cancelled.';return}}
+    const blob=await finishSession(S);const name=`${safeName($('storyName').value||'Whole story')}.mp4`;
+    const r=await saveFile(blob,name);const sz=blob.size>1<<30?(blob.size/(1<<30)).toFixed(2)+' GB':(blob.size/1048576).toFixed(0)+' MB';
+    $('expMsg').textContent=r==='saved'?`Done: ${name} (${fmt(total)}, ${sz})`:r==='declined'?'Save cancelled. Click Export to try again.':'Couldn\'t save the file. Try "Smaller file" or 1280×720.';
+  }catch(e){console.error(e);$('expMsg').textContent='Export failed: '+(e&&e.message?e.message:e)}
+  finally{if(S)closeSession(S);pickChapter(back);exportEnd()}});
+function updSizeEst(){const el=$('sizeEst');if(!el)return;const[W,H]=RES,fps=$('qual').value==='small'?24:30;const br=bitrateFor(W,H,fps)*.55+160000;
+  let whole=0;if(FULL)whole=FULL.ends[FULL.n-1]+FULL.n*3.6;const one=duration;const mb=s=>{const v=br*s/8/1048576;return v>1024?(v/1024).toFixed(1)+' GB':Math.max(1,Math.round(v))+' MB'};
+  el.innerHTML=`About <b>${mb(one)}</b> for this chapter (${fmt(one)})${whole?` · about <b>${mb(whole)}</b> for the whole story (${fmt(whole)})`:''}.`}
+
 $('cancelBtn').addEventListener('click',()=>{cancelExport=true});
 $('autoSyncBtn').addEventListener('click',()=>{if(AUTO_SRT){CUES=null;AUTO_SRT=false;FULL=null}autoSync()});
 $('saveSrtBtn').addEventListener('click',async()=>{if(!CUES)return;const off=!downloads;const r=await saveFile(new Blob([cuesToSrt()],{type:'text/plain'}),off?'narration-auto.srt':'narration-auto.srt.txt');if(r==='saved')toast(off?'Saved narration-auto.srt':'Saved. Rename it to .srt if your editor needs that.',5000)});
@@ -2904,7 +2971,7 @@ const look=store.get('look',null);
 if(look){$('res').value=look.res||'1920x1080';CUR_THEME=THEMES[look.theme]?look.theme:'midnight';$('optTime').checked=look.time!==false;$('optIntro').checked=look.intro!==false;$('tsize').value=look.tsize||'1';$('popVol').value=look.popVol??'0.5';$('optTyping').checked=look.typing!==false;$('optNames').checked=look.names!==false;$('optNarr').checked=look.narr!==false;$('wpm').value=look.wpm||150}
 RES=$('res').value.split('x').map(Number);setPreviewSize();$('storyName').value=store.get('storyName','Chosen One Support Chat (Kanto)');$('author').value=store.get('author','HeadcaseKiller');
 $('introMsg').value=store.get('introMsg','TheChosenOne: today I woke up late, got a Pokémon that hated me, got a phone from mew, found out I’m the chosen one, whatever that means, got attacked by a whole flock of spearow, earned my starters respect, maybe, fell in a river with my injured starter, got fished out by an angry girl, stole a bike, rode to the nearest town, got stopped by police, escorted to a center, which was quickly attacked by team rocket, and played a part in blowing up that center, how was everybody else’s day?\nSeveral users are typing…');
-$('introAll').checked=!!store.get('introAll',false);buildSwatches();
+$('qual').value=store.get('qual','std');$('introAll').checked=!!store.get('introAll',false);$('introSrc').value=store.get('introSrc','silent');$('introLen').value=store.get('introLen','30');syncIntroSrc();buildSwatches();
 const DEMO=`The rain had been going for an hour when Mira finally knocked on the workshop door.
 
 “You’re late,” said Theo, not looking up from the clock he was fixing.
